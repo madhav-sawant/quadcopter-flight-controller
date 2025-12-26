@@ -1,0 +1,65 @@
+#include "mixer.h"
+#include "../pwm/pwm.h"
+
+static bool mixer_armed = false;
+static uint16_t motor_cmds[4] = {1000, 1000, 1000, 1000};
+
+static uint16_t clamp_motor(int32_t val) {
+  // When armed, motors should never go below IDLE or above MAX
+  if (val < MIXER_IDLE_THROTTLE)
+    return MIXER_IDLE_THROTTLE;
+  if (val > MIXER_MAX_THROTTLE)
+    return MIXER_MAX_THROTTLE;
+  return (uint16_t)val;
+}
+
+void mixer_init(void) {
+  mixer_armed = false;
+  for (int i = 0; i < 4; i++)
+    motor_cmds[i] = MIXER_STOP_CMD;
+}
+
+void mixer_update(uint16_t throttle_us, float roll_pid, float pitch_pid,
+                  float yaw_pid) {
+  if (!mixer_armed) {
+    for (int i = 0; i < 4; i++) {
+      motor_cmds[i] = MIXER_STOP_CMD;
+      pwm_set_motor(i, MIXER_STOP_CMD);
+    }
+    return;
+  }
+
+  int32_t t = throttle_us;
+  if (t < MIXER_IDLE_THROTTLE)
+    t = MIXER_IDLE_THROTTLE;
+  if (t > MIXER_MAX_THROTTLE)
+    t = MIXER_MAX_THROTTLE;
+
+  int32_t m1 = t - (int32_t)roll_pid + (int32_t)pitch_pid + (int32_t)yaw_pid;
+  int32_t m2 = t - (int32_t)roll_pid - (int32_t)pitch_pid - (int32_t)yaw_pid;
+  int32_t m3 = t + (int32_t)roll_pid - (int32_t)pitch_pid + (int32_t)yaw_pid;
+  int32_t m4 = t + (int32_t)roll_pid + (int32_t)pitch_pid - (int32_t)yaw_pid;
+
+  motor_cmds[0] = clamp_motor(m1);
+  motor_cmds[1] = clamp_motor(m2);
+  motor_cmds[2] = clamp_motor(m3);
+  motor_cmds[3] = clamp_motor(m4);
+
+  pwm_set_motor(0, motor_cmds[0]);
+  pwm_set_motor(1, motor_cmds[1]);
+  pwm_set_motor(2, motor_cmds[2]);
+  pwm_set_motor(3, motor_cmds[3]);
+}
+
+void mixer_arm(bool armed) {
+  mixer_armed = armed;
+  if (!armed)
+    mixer_update(1000, 0, 0, 0);
+}
+
+void mixer_get_outputs(uint16_t *m1, uint16_t *m2, uint16_t *m3, uint16_t *m4) {
+  *m1 = motor_cmds[0];
+  *m2 = motor_cmds[1];
+  *m3 = motor_cmds[2];
+  *m4 = motor_cmds[3];
+}

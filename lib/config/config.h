@@ -1,0 +1,35 @@
+#ifndef CONFIG_H
+#define CONFIG_H
+
+#include <stdint.h>
+
+typedef struct {
+  // Rate PID Gains
+  float roll_kp;
+  float roll_ki;
+  float roll_kd;
+
+  float pitch_kp;
+  float pitch_ki;
+  float pitch_kd;
+
+  float yaw_kp;
+  float yaw_ki;
+  float yaw_kd;
+
+  // Limits
+  float rate_output_limit;
+  float rate_integral_limit;
+
+  // Safety
+  float crash_angle_deg;
+  uint16_t low_bat_threshold;
+} system_config_t;
+
+// Global configuration instance
+extern system_config_t sys_cfg;
+
+// Load defaults into the config structure
+void config_load_defaults(void);
+
+#endif // CONFIG_H
