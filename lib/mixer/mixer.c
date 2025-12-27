@@ -44,10 +44,23 @@ void mixer_update(uint16_t throttle_us, float roll_pid, float pitch_pid,
   if (t > MIXER_MAX_THROTTLE)
     t = MIXER_MAX_THROTTLE;
 
-  int32_t m1 = t - (int32_t)roll_pid + (int32_t)pitch_pid + (int32_t)yaw_pid;
-  int32_t m2 = t - (int32_t)roll_pid - (int32_t)pitch_pid - (int32_t)yaw_pid;
-  int32_t m3 = t + (int32_t)roll_pid - (int32_t)pitch_pid + (int32_t)yaw_pid;
-  int32_t m4 = t + (int32_t)roll_pid + (int32_t)pitch_pid - (int32_t)yaw_pid;
+  // QUAD-X MIXER (Standard Betaflight/Cleanflight layout)
+  // Motor positions: 1=Rear Right, 2=Front Right, 3=Rear Left, 4=Front Left
+  // Motor rotation: 1=CCW, 2=CW, 3=CW, 4=CCW
+  //
+  // Roll (+) = Right wing down  -> M3,M4 speed up, M1,M2 slow down
+  // Pitch (+) = Nose up         -> M2,M4 speed up, M1,M3 slow down
+  // Yaw (+) = Clockwise         -> M1,M4 speed up (CCW motors), M2,M3 slow down
+  // (CW motors)
+
+  int32_t m1 = t - (int32_t)roll_pid - (int32_t)pitch_pid +
+               (int32_t)yaw_pid; // Rear Right CCW
+  int32_t m2 = t - (int32_t)roll_pid + (int32_t)pitch_pid -
+               (int32_t)yaw_pid; // Front Right CW
+  int32_t m3 = t + (int32_t)roll_pid - (int32_t)pitch_pid -
+               (int32_t)yaw_pid; // Rear Left CW
+  int32_t m4 = t + (int32_t)roll_pid + (int32_t)pitch_pid +
+               (int32_t)yaw_pid; // Front Left CCW
 
   motor_cmds[0] = clamp_motor(m1);
   motor_cmds[1] = clamp_motor(m2);

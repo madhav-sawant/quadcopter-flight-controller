@@ -1,10 +1,6 @@
 #include "rate_control.h"
 #include "../pid/pid.h"
 
-// NOTE: Deadband code commented out - using DLPF hardware filtering instead
-// #define GYRO_DEADBAND_DPS 10.0f
-// #define SETPOINT_DEADBAND_DPS 5.0f
-
 static pid_controller_t pid_roll_rate;
 static pid_controller_t pid_pitch_rate;
 static pid_controller_t pid_yaw_rate;

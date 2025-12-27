@@ -17,6 +17,7 @@
 #define REG_ACCEL_CONFIG 0x1C
 #define AFS_SEL_8G 0x10
 #define REG_ACCEL_XOUT_H 0x3B
+#define REG_GYRO_XOUT_H 0x43
 #define REG_WHO_AM_I 0x75
 
 #define I2C_MASTER_SCL_IO 22
@@ -123,7 +124,7 @@ void imu_calibrate_gyro(void) {
   uint8_t buffer[6];
 
   for (int i = 0; i < samples; i++) {
-    if (read_registers(0x43, buffer, 6) == ESP_OK) {
+    if (read_registers(REG_GYRO_XOUT_H, buffer, 6) == ESP_OK) {
       int16_t raw_x = (int16_t)((buffer[0] << 8) | buffer[1]);
       int16_t raw_y = (int16_t)((buffer[2] << 8) | buffer[3]);
       int16_t raw_z = (int16_t)((buffer[4] << 8) | buffer[5]);
@@ -192,37 +193,6 @@ void imu_read(float dt_sec) {
   imu_state.gyro_z_dps = (gz_raw / GYRO_SCALE_FACTOR) - gyro_bias_z;
 
   // ============================================================================
-  // TEST 1: GYRO ONLY MODE (No complementary filter)
-  // This will show gyro drift over time!
-  // ============================================================================
-
-  // GYRO ONLY - Pure integration (will drift!)
-  // imu_state.pitch_deg = imu_state.pitch_deg + imu_state.gyro_y_dps * dt_sec;
-  // imu_state.roll_deg = imu_state.roll_deg + imu_state.gyro_x_dps * dt_sec;
-
-  // ============================================================================
-  // TEST 2: ACCEL ONLY MODE
-  // This will show noise/vibration!
-  // ============================================================================
-
-  // float accel_pitch = atan2f(imu_state.accel_x_g,
-  //                            sqrtf(imu_state.accel_y_g * imu_state.accel_y_g
-  //                            +
-  //                                  imu_state.accel_z_g *
-  //                                  imu_state.accel_z_g)) *
-  //                     RAD_TO_DEG;
-  // float accel_roll =
-  //     atan2f(imu_state.accel_y_g, imu_state.accel_z_g) * RAD_TO_DEG;
-
-  // // Apply Calibration Offsets
-  // accel_pitch -= accel_offset_pitch;
-  // accel_roll -= accel_offset_roll;
-
-  // // Direct assignment (No Filter)
-  // imu_state.pitch_deg = accel_pitch;
-  // imu_state.roll_deg = accel_roll;
-
-  // ============================================================================
   // TEST 3: COMPLEMENTARY FILTER (ACTIVE)
   // Combines Gyro (fast) + Accel (stable)
   // ============================================================================
@@ -257,22 +227,6 @@ const imu_data_t *imu_get_data(void) { return &imu_state; }
 
 // Magic number to verify calibration validity
 #define IMU_CAL_MAGIC 0xCAFE1234
-
-bool imu_calibration_exists_in_nvs(void) {
-  nvs_handle_t handle;
-  esp_err_t err = nvs_open(NVS_IMU_CAL_NAMESPACE, NVS_READONLY, &handle);
-  if (err != ESP_OK) {
-    return false;
-  }
-
-  // Check for magic number to verify calibration was properly saved
-  uint32_t magic = 0;
-  size_t len = sizeof(uint32_t);
-  err = nvs_get_blob(handle, "magic", &magic, &len);
-  nvs_close(handle);
-
-  return (err == ESP_OK && magic == IMU_CAL_MAGIC);
-}
 
 bool imu_calibration_load_from_nvs(void) {
   nvs_handle_t handle;

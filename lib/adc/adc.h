@@ -16,8 +16,6 @@
 #define VOLTAGE_OFFSET_MV 180
 
 void adc_init(void);
-uint16_t adc_read_raw(void);
-uint16_t adc_read_voltage(uint16_t raw);
 uint16_t adc_read_battery_voltg(void);
 
 #endif // ADC_H

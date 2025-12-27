@@ -10,9 +10,10 @@
  * 4. Follow the on-screen countdown prompts
  *
  * MOTOR PINS:
- * - Motor 1: GPIO 12
- * - Motor 2: GPIO 13
- * - Motor 3: GPIO 14
+ * MOTOR PINS:
+ * - Motor 1: GPIO 13
+ * - Motor 2: GPIO 25
+ * - Motor 3: GPIO 33
  * - Motor 4: GPIO 27
  */
 
@@ -27,7 +28,7 @@
 /*                               Configuration                                */
 /* -------------------------------------------------------------------------- */
 
-#define PWM_FREQ_HZ 500
+#define PWM_FREQ_HZ 250
 #define PWM_RES_BIT 12
 #define PWM_MOTOR_COUNT 4
 
@@ -37,7 +38,7 @@
 #define LED_PIN 2
 
 // Motor GPIO pins
-static const int motor_gpios[PWM_MOTOR_COUNT] = {12, 13, 14, 27};
+static const int motor_gpios[PWM_MOTOR_COUNT] = {13, 25, 33, 27};
 static const ledc_channel_t motor_channels[PWM_MOTOR_COUNT] = {
     LEDC_CHANNEL_0, LEDC_CHANNEL_1, LEDC_CHANNEL_2, LEDC_CHANNEL_3};
 
@@ -129,9 +130,9 @@ void app_main(void) {
   printf("╚════════════════════════════════════════╝\n");
   printf("\n");
   printf("Motor Pins:\n");
-  printf("  Motor 1: GPIO 12\n");
-  printf("  Motor 2: GPIO 13\n");
-  printf("  Motor 3: GPIO 14\n");
+  printf("  Motor 1: GPIO 13\n");
+  printf("  Motor 2: GPIO 25\n");
+  printf("  Motor 3: GPIO 33\n");
   printf("  Motor 4: GPIO 27\n");
   printf("\n");
 

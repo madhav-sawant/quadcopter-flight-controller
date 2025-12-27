@@ -12,7 +12,6 @@ void mixer_init(void);
 void mixer_update(uint16_t throttle_us, float roll_pid, float pitch_pid,
                   float yaw_pid);
 void mixer_arm(bool armed);
-bool mixer_is_armed(void);
 void mixer_get_outputs(uint16_t *m1, uint16_t *m2, uint16_t *m3, uint16_t *m4);
 
 #endif // MIXER_H

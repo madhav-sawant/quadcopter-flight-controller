@@ -4,7 +4,7 @@
 #include "../config/config.h"
 #include <stdbool.h>
 
-#define RATE_LOOP_DT_SEC 0.002f
+#define RATE_LOOP_DT_SEC 0.004f
 
 typedef struct {
   float roll;

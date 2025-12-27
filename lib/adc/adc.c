@@ -19,7 +19,7 @@ void adc_init(void) {
       adc_oneshot_config_channel(adc1_handle, ADC_CHANNEL, &config));
 }
 
-uint16_t adc_read_raw(void) {
+static uint16_t adc_read_raw(void) {
   int raw_val = 0;
   uint32_t sum = 0;
 
@@ -32,7 +32,7 @@ uint16_t adc_read_raw(void) {
   return (uint16_t)(sum / 64);
 }
 
-uint16_t adc_read_voltage(uint16_t raw) {
+static uint16_t adc_read_voltage(uint16_t raw) {
   // Basic linear mapping for 12-bit ADC (0-4095) -> 0-3300mV (approx)
   // Note: This is a rough approximation. For precision, use esp_adc_cal
   // (calibration scheme). However, the user's existing code used this simple

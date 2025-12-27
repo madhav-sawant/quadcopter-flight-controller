@@ -35,8 +35,3 @@ float pid_calculate(pid_controller_t *pid, float setpoint, float measurement,
 
   return output;
 }
-
-void pid_reset(pid_controller_t *pid) {
-  pid->integral = 0.0f;
-  pid->prev_error = 0.0f;
-}

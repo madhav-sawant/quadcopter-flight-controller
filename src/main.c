@@ -38,6 +38,7 @@
 #include <stdint.h>
 #include <stdio.h>
 
+#include "../lib/blackbox/blackbox.h"
 #include "../lib/config/config.h"
 #include "../lib/rx/rx.h"
 #include "../lib/webserver/webserver.h"
@@ -56,12 +57,12 @@
 #define LED_PIN 2
 #define BUTTON_PIN 0 // Boot button for emergency stop
 
-// Control loop frequency (500 Hz)
-#define CONTROL_LOOP_FREQ_HZ 500
+// Control loop frequency (250 Hz)
+#define CONTROL_LOOP_FREQ_HZ 250
 #define CONTROL_LOOP_PERIOD_US (1000000 / CONTROL_LOOP_FREQ_HZ)
 
-// Debug print frequency (10 Hz)
-#define DEBUG_PRINT_DIVIDER 50
+// Debug print frequency (10 Hz) -> 250 / 25 = 10
+#define DEBUG_PRINT_DIVIDER 25
 
 // RC Mapping
 #define RC_MAX_ANGLE_DEG 45.0f
@@ -74,9 +75,10 @@
 
 static volatile bool control_loop_flag = false;
 static int debug_counter = 0;
+static int blackbox_counter = 0; // Counter for 50Hz blackbox logging
 
 // System State
-static bool system_armed = false;
+bool system_armed = false;
 static bool error_state = false;
 
 // Debug data
@@ -84,7 +86,6 @@ static float debug_gyro[3];
 static float debug_angle[2]; // Roll, Pitch
 static float debug_pid[3];
 static uint16_t debug_motors[4];
-static uint16_t debug_rc[5]; // Roll, Pitch, Thr, Yaw, Aux1
 static uint16_t debug_vbat = 0;
 static int64_t debug_exec_time_us = 0;
 
@@ -92,7 +93,7 @@ static int64_t debug_exec_time_us = 0;
 /*                          Control Loop (500 Hz Timer)                       */
 /* -------------------------------------------------------------------------- */
 
-static void control_loop_callback(void *arg) {
+static void IRAM_ATTR control_loop_callback(void *arg) {
   (void)arg;
 
   int64_t start_time = esp_timer_get_time();
@@ -102,30 +103,27 @@ static void control_loop_callback(void *arg) {
   const imu_data_t *imu = imu_get_data();
 
   // 2. Safety Checks (Crash detection)
-  // TEST MODE: RESTORED CRASH CHECK
-  // Fused angle is stable, so we can safely use this now.
+  // Simple check: if roll or pitch angle is too high, disarm
   if (fabs(imu->roll_deg) > sys_cfg.crash_angle_deg ||
       fabs(imu->pitch_deg) > sys_cfg.crash_angle_deg) {
     mixer_arm(false);
     system_armed = false;
     error_state = true;
-  } else {
-    // Auto-reset error state if level and disarmed
-    if (error_state && !system_armed && fabs(imu->roll_deg) < 20.0f &&
-        fabs(imu->pitch_deg) < 20.0f) {
-      error_state = false;
-    }
   }
 
-  // 3. Update Angle & Rate PID Controllers
-
-  // Read RX Channels (AETR: 0=Roll, 1=Pitch, 2=Throttle, 3=Yaw)
+  // 3. Read RX Channels
   uint16_t rx_roll = rx_get_channel(0);
   uint16_t rx_pitch = rx_get_channel(1);
   uint16_t rx_thr = rx_get_channel(2);
   uint16_t rx_yaw = rx_get_channel(3);
 
-  // Map Roll/Pitch (Angle Mode)
+  // Map Yaw (always rate controlled)
+  float target_yaw_rate = 0.0f;
+  if (abs(rx_yaw - 1500) > RC_DEADBAND_US) {
+    target_yaw_rate = (float)(rx_yaw - 1500) / 500.0f * RC_MAX_YAW_RATE_DPS;
+  }
+
+  // Map Roll/Pitch Stick -> Angle Target
   float target_roll = 0.0f;
   if (abs(rx_roll - 1500) > RC_DEADBAND_US) {
     target_roll = (float)(rx_roll - 1500) / 500.0f * RC_MAX_ANGLE_DEG;
@@ -133,33 +131,22 @@ static void control_loop_callback(void *arg) {
 
   float target_pitch = 0.0f;
   if (abs(rx_pitch - 1500) > RC_DEADBAND_US) {
-    // Invert pitch if necessary (Forward stick = Lower PWM? Check radio)
-    // Assuming Forward = High PWM -> Pitch Down (Negative Angle)
-    // Standard: Low=Pitch Up, High=Pitch Down? Or vice versa.
-    // Usually: Stick Up (High PWM) -> Pitch Down (Nose Down).
-    // Let's assume Standard: High PWM (2000) -> +45 deg.
     target_pitch = (float)(rx_pitch - 1500) / 500.0f * RC_MAX_ANGLE_DEG;
   }
 
-  // Map Yaw (Rate Mode)
-  float target_yaw_rate = 0.0f;
-  if (abs(rx_yaw - 1500) > RC_DEADBAND_US) {
-    target_yaw_rate = (float)(rx_yaw - 1500) / 500.0f * RC_MAX_YAW_RATE_DPS;
-  }
-
-  // A. Outer Loop (Angle)
+  // 4. Cascade Control: Angle -> Rate
+  // Angle loop output = rate setpoint for Rate loop
+  // When Angle P = 0, angle_control outputs 0, so Rate loop targets 0 deg/s
   angle_control_update(imu->roll_deg, imu->pitch_deg, target_roll, target_pitch,
                        1.0f / CONTROL_LOOP_FREQ_HZ);
   const angle_output_t *angle_out = angle_control_get_output();
 
-  // B. Inner Loop (Rate)
-  // Use Angle Loop Output as Setpoints for Roll/Pitch
-  // Yaw is Rate-Controlled from Stick
+  // Rate loop: try to achieve the rate setpoint from angle loop (0 when P=0)
   rate_control_update(angle_out->roll_rate_setpoint,
                       angle_out->pitch_rate_setpoint, target_yaw_rate,
                       imu->gyro_x_dps, imu->gyro_y_dps, imu->gyro_z_dps);
 
-  // 4. Update Mixer
+  // 5. Update Mixer
   const rate_output_t *pid_out = rate_control_get_output();
 
   // Throttle:
@@ -174,8 +161,6 @@ static void control_loop_callback(void *arg) {
   if (throttle > 2000)
     throttle = 2000;
 
-  // TEST MODE: RESTORED PID MIXING
-  // Full flight controller logic active!
   mixer_update(throttle, pid_out->roll, pid_out->pitch, pid_out->yaw);
 
   int64_t end_time = esp_timer_get_time();
@@ -199,14 +184,31 @@ static void control_loop_callback(void *arg) {
     mixer_get_outputs(&debug_motors[0], &debug_motors[1], &debug_motors[2],
                       &debug_motors[3]);
 
-    // Capture RX for debug
-    debug_rc[0] = rx_get_channel(0); // Roll
-    debug_rc[1] = rx_get_channel(1); // Pitch
-    debug_rc[2] = rx_get_channel(2); // Thr
-    debug_rc[3] = rx_get_channel(3); // Yaw
-    debug_rc[4] = rx_get_channel(4); // Aux1
-
     debug_exec_time_us = end_time - start_time;
+  }
+
+  // 6. Blackbox Logging (50Hz - every 10th iteration) - ONLY WHEN ARMED
+  if (system_armed && ++blackbox_counter >= BLACKBOX_LOG_DIVIDER) {
+    blackbox_counter = 0;
+
+    blackbox_entry_t entry = {
+        .timestamp_ms = (uint32_t)(esp_timer_get_time() / 1000),
+        .gyro_x = imu->gyro_x_dps,
+        .gyro_y = imu->gyro_y_dps,
+        .gyro_z = imu->gyro_z_dps,
+        .angle_roll = imu->roll_deg,
+        .angle_pitch = imu->pitch_deg,
+        .pid_roll = pid_out->roll,
+        .pid_pitch = pid_out->pitch,
+        .pid_yaw = pid_out->yaw,
+        .motor = {debug_motors[0], debug_motors[1], debug_motors[2],
+                  debug_motors[3]},
+        .throttle = throttle,
+        .flags = (system_armed ? BLACKBOX_FLAG_ARMED : 0) |
+                 (error_state ? BLACKBOX_FLAG_ERROR : 0)};
+    blackbox_log(&entry);
+  } else if (!system_armed) {
+    blackbox_counter = 0; // Reset counter when disarmed
   }
 }
 
@@ -215,18 +217,32 @@ static void control_loop_callback(void *arg) {
 /* -------------------------------------------------------------------------- */
 
 void app_main(void) {
-  // 0. IMMEDIATE PWM INIT (Fix for ESC boot issue)
-  // Initialize motors FIRST to prevent ESCs from seeing floating pins
+  // ========== CRITICAL: ESC BOOT FIX ==========
+  // Configure motor GPIOs as OUTPUT LOW immediately to prevent
+  // ESCs from seeing floating signals during ESP32 boot.
+  // This happens BEFORE any other initialization!
+  gpio_reset_pin(PWM_MOTOR_1_GPIO); // Motor 1
+  gpio_reset_pin(PWM_MOTOR_2_GPIO); // Motor 2
+  gpio_reset_pin(PWM_MOTOR_3_GPIO); // Motor 3
+  gpio_reset_pin(PWM_MOTOR_4_GPIO); // Motor 4
+  gpio_set_direction(PWM_MOTOR_1_GPIO, GPIO_MODE_OUTPUT);
+  gpio_set_direction(PWM_MOTOR_2_GPIO, GPIO_MODE_OUTPUT);
+  gpio_set_direction(PWM_MOTOR_3_GPIO, GPIO_MODE_OUTPUT);
+  gpio_set_direction(PWM_MOTOR_4_GPIO, GPIO_MODE_OUTPUT);
+  gpio_set_level(PWM_MOTOR_1_GPIO, 0);
+  gpio_set_level(PWM_MOTOR_2_GPIO, 0);
+  gpio_set_level(PWM_MOTOR_3_GPIO, 0);
+  gpio_set_level(PWM_MOTOR_4_GPIO, 0);
+
+  // Now init PWM properly (will take over these pins)
   pwm_init();
 
-  // Send stable 1000us (IDLE) immediately
+  // Send stable IDLE signal to all motors for 3 seconds
   for (int i = 0; i < 4; i++) {
     pwm_set_motor(i, 1000);
   }
-
-  // Wait for serial monitor to connect
-  // printf("BOOTING...\n");
-  // vTaskDelay(pdMS_TO_TICKS(3000)); // REMOVED: Faster boot
+  vTaskDelay(pdMS_TO_TICKS(3000)); // ESC arm time
+  // ========== END ESC BOOT FIX ==========
 
   // 1. Init NVS
   esp_err_t ret = nvs_flash_init();
@@ -237,17 +253,9 @@ void app_main(void) {
   }
   ESP_ERROR_CHECK(ret);
 
-  // Load Configuration (defaults first, then try NVS)
+  // Load Configuration
   config_load_defaults();
-  if (config_load_from_nvs()) {
-    // printf("Loaded PID config from NVS.\n");
-  } else {
-    // printf("Using default PID config.\n");
-  }
-
-  // 2. Init Wi-Fi and Web Server (runs on Core 0)
-  webserver_init();
-  // printf("Web Server running at http://192.168.4.1\n");
+  config_load_from_nvs(); // Load saved values from flash (if any)
 
   // 2. Init GPIO
   gpio_reset_pin(LED_PIN);
@@ -259,46 +267,34 @@ void app_main(void) {
 
   // 3. Init Subsystems
   adc_init();
-  // pwm_init(); // Moved to top
-
-  // ESC Init (Moved to top)
 
   rx_init();
   mixer_init();
+  blackbox_init();  // RAM-based flight data logger
+  webserver_init(); // WiFi AP + PID tuning web interface
 
   if (imu_init() != ESP_OK) {
-    // printf("IMU Init Failed!\n");
+    printf("IMU Init Failed!\n");
     while (1)
       vTaskDelay(100);
   }
 
-  // 4. IMU Calibration (Check NVS first, then calibrate if needed)
-  if (imu_calibration_exists_in_nvs()) {
-    // Load stored calibration from NVS (skip manual calibration!)
-    // printf("Found IMU calibration in NVS, loading...\n");
-    if (!imu_calibration_load_from_nvs()) {
-      // Failed to load, do fresh calibration
-      // printf("Failed to load calibration, performing fresh
-      // calibration...\n");
-      goto do_calibration;
-    }
-    // printf("IMU calibration loaded from NVS - Skipping calibration!\n");
+  // 4. Gyro/Accel Calibration (load from NVS if available)
+  if (imu_calibration_load_from_nvs()) {
+    printf("IMU Calibration loaded from NVS.\n");
   } else {
-  do_calibration:
-    // No stored calibration, perform fresh calibration
-    // printf("No IMU calibration in NVS, performing fresh calibration...\n");
-    // printf("Calibrating Gyro... Keep Still.\n");
+    printf("Calibrating Gyro... Keep Still.\n");
     vTaskDelay(pdMS_TO_TICKS(1000));
     imu_calibrate_gyro();
-    // printf("Gyro Calibrated.\n");
+    printf("Gyro Calibrated.\n");
 
-    // printf("Calibrating Accel... Keep Level.\n");
+    printf("Calibrating Accel... Keep Level.\n");
     imu_calibrate_accel();
-    // printf("Accel Calibrated.\n");
+    printf("Accel Calibrated.\n");
 
     // Save calibration to NVS for next boot
     imu_calibration_save_to_nvs();
-    // printf("IMU calibration saved to NVS.\n");
+    printf("Calibration saved to NVS.\n");
   }
 
   // 5. Init Control Loops
@@ -316,10 +312,7 @@ void app_main(void) {
   ESP_ERROR_CHECK(
       esp_timer_start_periodic(control_timer, CONTROL_LOOP_PERIOD_US));
 
-  // printf("Control Loop Started.\n");
-
-  // LED blink state for low battery warning
-  static uint8_t led_blink_counter = 0;
+  printf("Control Loop Started.\n");
 
   // 8. Main Loop (Monitoring & Arming)
   while (1) {
@@ -335,67 +328,80 @@ void app_main(void) {
         uint16_t rx_thr_check = rx_get_channel(2);
         if (rx_thr_check < 1150) { // Throttle must be low to arm
           system_armed = true;
+
+          // Reset PIDs to prevent I-term windup from ground handling
+          rate_control_init();
+          angle_control_init();
+
           mixer_arm(true);
-          // printf("ARMED! (Switch High)\n");
+          blackbox_clear(); // Clear old data
+          blackbox_start(); // Start recording new flight
+          printf("ARMED! (Switch High)\n");
         } else {
-          // static int warn_counter = 0;
-          // if (warn_counter++ % 50 == 0)
-          //   printf("CANNOT ARM: Throttle not low!\n");
+          static int warn_counter = 0;
+          if (warn_counter++ % 50 == 0)
+            printf("CANNOT ARM: Throttle not low!\n");
         }
       }
     } else {
       if (system_armed) {
         system_armed = false;
         mixer_arm(false);
-        // if (!rx_ok)
-        //   printf("DISARMED! (RX Signal Lost)\n");
-        // else
-        //   printf("DISARMED! (Switch Low)\n");
+        blackbox_stop(); // Stop recording, preserve data for download
+        if (!rx_ok)
+          printf("DISARMED! (RX Signal Lost)\n");
+        else
+          printf("DISARMED! (Switch Low)\n");
+      }
+
+      // Clear error state if disarmed and switch is low (allow re-arming)
+      if (error_state && !arm_switch_high) {
+        error_state = false;
+        printf("Error State Cleared. Ready to Arm.\n");
       }
     }
 
-    // Low Battery Check
-    debug_vbat = adc_read_battery_voltg();
-    bool low_battery = (debug_vbat < sys_cfg.low_bat_threshold);
-
-    // LED Status Logic:
-    // - Armed: LED ON (solid)
-    // - Low Battery: LED BLINK (fast)
-    // - Disarmed + Battery OK: LED OFF
-    if (low_battery) {
-      led_blink_counter++;
-      gpio_set_level(LED_PIN, (led_blink_counter / 5) % 2); // Fast blink
-    } else if (system_armed) {
-      gpio_set_level(LED_PIN, 1); // Solid ON
-    } else {
-      gpio_set_level(LED_PIN, 0); // OFF
-    }
-
-    // Critical battery disarm
-    if (system_armed && debug_vbat < 9500) { // Critical 9.5V
-      system_armed = false;
-      mixer_arm(false);
-      // printf("CRITICAL BATTERY! DISARMED.\n");
-    }
+    // LED Status
+    gpio_set_level(LED_PIN, system_armed ? 1 : 0);
 
     // Check Emergency Stop Button
     if (gpio_get_level(BUTTON_PIN) == 0) {
       system_armed = false;
       mixer_arm(false);
-      // printf("EMERGENCY STOP TRIGGERED!\n");
+      printf("EMERGENCY STOP TRIGGERED!\n");
       error_state = true;
     }
 
-    // TEST MODE: Print ALL Debug Data
+    // Low Battery Check (Slow)
+    debug_vbat = adc_read_battery_voltg();
+    if (system_armed && debug_vbat < sys_cfg.low_bat_threshold) {
+      // Debounce could be added here, but for safety, immediate warning/disarm
+      // For now, just print warning, maybe disarm if critical
+      if (debug_vbat < 9500) { // Critical 9.5V
+        system_armed = false;
+        mixer_arm(false);
+        printf("CRITICAL BATTERY! DISARMED.\n");
+      }
+    }
+
     if (control_loop_flag) {
       control_loop_flag = false;
-      // printf("GYRO: %6.2f %6.2f %6.2f | ANG: %6.2f %6.2f | RX: %4d %4d %4d "
-      //        "%4d %4d | MOT: %4d %4d %4d %4d | BAT: %4d mV | STS: %s %s\n",
-      //        debug_gyro[0], debug_gyro[1], debug_gyro[2], debug_angle[0],
-      //        debug_angle[1], debug_rc[0], debug_rc[1], debug_rc[2],
-      //        debug_rc[3], debug_rc[4], debug_motors[0], debug_motors[1],
-      //        debug_motors[2], debug_motors[3], debug_vbat, system_armed ?
-      //        "ARMED" : "DISARM", error_state ? "ERR" : "OK");
+
+      uint16_t rx_ch[RX_CHANNEL_COUNT];
+      rx_get_all(rx_ch);
+
+      printf("A: %5.1f %5.1f | G: %6.1f %6.1f %6.1f | P: %5.1f %5.1f %5.1f | "
+             "M: %4d %4d %4d %4d | RX: %4d %4d %4d %4d %4d %4d "
+             "| V: %d | T: %lld us\n",
+             debug_angle[0], debug_angle[1], debug_gyro[0], debug_gyro[1],
+             debug_gyro[2], debug_pid[0], debug_pid[1], debug_pid[2],
+             debug_motors[0], debug_motors[1], debug_motors[2], debug_motors[3],
+             rx_ch[0], rx_ch[1], rx_ch[2], rx_ch[3], rx_ch[4], rx_ch[5],
+             debug_vbat, debug_exec_time_us);
+
+      if (error_state) {
+        printf("!!! SYSTEM ERROR / DISARMED !!!\n");
+      }
     }
 
     vTaskDelay(pdMS_TO_TICKS(10));

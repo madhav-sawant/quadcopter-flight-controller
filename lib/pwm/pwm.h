@@ -3,7 +3,7 @@
 
 #include <stdint.h>
 
-#define PWM_FREQ_HZ 500
+#define PWM_FREQ_HZ 250
 #define PWM_RES_BIT 12
 #define PWM_MOTOR_COUNT 4
 #define PWM_MIN_PULSE_US 1000
