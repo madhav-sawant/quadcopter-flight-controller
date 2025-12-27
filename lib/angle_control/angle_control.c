@@ -1,15 +1,6 @@
 #include "angle_control.h"
+#include "../config/config.h"
 #include "../pid/pid.h"
-
-// Tuning Constants (P-Only for now)
-// Kp = 2.0 means for 10 degrees error, we ask for 20 deg/s correction rate.
-#define ANGLE_ROLL_KP 2.0f
-#define ANGLE_ROLL_KI 0.0f
-#define ANGLE_ROLL_KD 0.0f
-
-#define ANGLE_PITCH_KP 2.0f
-#define ANGLE_PITCH_KI 0.0f
-#define ANGLE_PITCH_KD 0.0f
 
 // Safety Limits
 #define MAX_RATE_SETPOINT_DPS 150.0f // Clamp desired rate to +/- 150 deg/s
@@ -22,12 +13,11 @@ static pid_controller_t pid_pitch_angle;
 static angle_output_t angle_output;
 
 void angle_control_init(void) {
-  // Initialize PIDs with limits
+  // Initialize PIDs with config values
   // Output limit is the Max Rate we want to command
-  // Integral limit is 0 since Ki is 0, but good to set safely
-  pid_init(&pid_roll_angle, ANGLE_ROLL_KP, ANGLE_ROLL_KI, ANGLE_ROLL_KD,
+  pid_init(&pid_roll_angle, sys_cfg.angle_roll_kp, 0.0f, 0.0f,
            MAX_RATE_SETPOINT_DPS, 0.0f);
-  pid_init(&pid_pitch_angle, ANGLE_PITCH_KP, ANGLE_PITCH_KI, ANGLE_PITCH_KD,
+  pid_init(&pid_pitch_angle, sys_cfg.angle_pitch_kp, 0.0f, 0.0f,
            MAX_RATE_SETPOINT_DPS, 0.0f);
 
   angle_output.roll_rate_setpoint = 0.0f;

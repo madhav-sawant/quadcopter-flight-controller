@@ -1,6 +1,7 @@
 #ifndef CONFIG_H
 #define CONFIG_H
 
+#include <stdbool.h>
 #include <stdint.h>
 
 typedef struct {
@@ -17,6 +18,10 @@ typedef struct {
   float yaw_ki;
   float yaw_kd;
 
+  // Angle PID Gains
+  float angle_roll_kp;
+  float angle_pitch_kp;
+
   // Limits
   float rate_output_limit;
   float rate_integral_limit;
@@ -31,5 +36,9 @@ extern system_config_t sys_cfg;
 
 // Load defaults into the config structure
 void config_load_defaults(void);
+
+// NVS Functions
+void config_save_to_nvs(void);
+bool config_load_from_nvs(void);
 
 #endif // CONFIG_H

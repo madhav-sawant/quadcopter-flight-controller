@@ -30,8 +30,17 @@ void mixer_update(uint16_t throttle_us, float roll_pid, float pitch_pid,
   }
 
   int32_t t = throttle_us;
-  if (t < MIXER_IDLE_THROTTLE)
-    t = MIXER_IDLE_THROTTLE;
+
+  // If throttle is below idle threshold, just spin at idle without PID mixing
+  // This prevents motor fluctuations when on the ground
+  if (t < MIXER_IDLE_THROTTLE + 50) { // Below 1150 = no PID mixing
+    for (int i = 0; i < 4; i++) {
+      motor_cmds[i] = MIXER_IDLE_THROTTLE;
+      pwm_set_motor(i, MIXER_IDLE_THROTTLE);
+    }
+    return;
+  }
+
   if (t > MIXER_MAX_THROTTLE)
     t = MIXER_MAX_THROTTLE;
 

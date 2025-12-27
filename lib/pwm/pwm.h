@@ -10,8 +10,8 @@
 #define PWM_MAX_PULSE_US 2000
 
 #define PWM_MOTOR_1_GPIO 13
-#define PWM_MOTOR_2_GPIO 12
-#define PWM_MOTOR_3_GPIO 14
+#define PWM_MOTOR_2_GPIO 25
+#define PWM_MOTOR_3_GPIO 33
 #define PWM_MOTOR_4_GPIO 27
 
 void pwm_init(void);

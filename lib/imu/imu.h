@@ -22,4 +22,9 @@ const imu_data_t *imu_get_data(void);
 void imu_calibrate_gyro(void);
 void imu_calibrate_accel(void);
 
+// NVS Calibration Storage (uses separate namespace from PID config)
+bool imu_calibration_exists_in_nvs(void);
+bool imu_calibration_load_from_nvs(void);
+void imu_calibration_save_to_nvs(void);
+
 #endif // IMU_H
