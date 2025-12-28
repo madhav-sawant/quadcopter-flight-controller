@@ -1,6 +1,7 @@
 #ifndef ANGLE_CONTROL_H
 #define ANGLE_CONTROL_H
 
+#include <stdbool.h>
 #include <stdint.h>
 
 /**
@@ -37,5 +38,11 @@ void angle_control_update(float roll_actual_deg, float pitch_actual_deg,
  * @return const angle_output_t* Pointer to the output struct
  */
 const angle_output_t *angle_control_get_output(void);
+
+/**
+ * @brief Freeze/unfreeze integral accumulation for Angle PIDs
+ * Call with true when throttle is low to prevent I-term windup on ground.
+ */
+void angle_control_freeze_integral(bool freeze);
 
 #endif // ANGLE_CONTROL_H

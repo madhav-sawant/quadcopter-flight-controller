@@ -40,13 +40,13 @@
 
 #include "../lib/blackbox/blackbox.h"
 #include "../lib/config/config.h"
+#include "../lib/pwm/pwm.h"
 #include "../lib/rx/rx.h"
 #include "../lib/webserver/webserver.h"
 #include "adc.h"
 #include "angle_control.h"
 #include "imu.h"
 #include "mixer.h"
-#include "pwm.h"
 #include "rate_control.h"
 
 /* -------------------------------------------------------------------------- */
@@ -75,7 +75,8 @@
 
 static volatile bool control_loop_flag = false;
 static int debug_counter = 0;
-static int blackbox_counter = 0; // Counter for 50Hz blackbox logging
+static int blackbox_counter = 0;  // Counter for 50Hz blackbox logging
+static int led_blink_counter = 0; // Counter for low battery LED blinking
 
 // System State
 bool system_armed = false;
@@ -171,6 +172,11 @@ static void IRAM_ATTR control_loop_callback(void *arg) {
     throttle = 1000;
   if (throttle > 2000)
     throttle = 2000;
+
+  // Integral Anti-Windup: Freeze I-term when throttle is low (on ground)
+  bool freeze_integral = (throttle < 1200);
+  rate_control_freeze_integral(freeze_integral);
+  angle_control_freeze_integral(freeze_integral);
 
   mixer_update(throttle, pid_out->roll, pid_out->pitch, pid_out->yaw);
 
@@ -360,7 +366,7 @@ void app_main(void) {
         mixer_arm(false);
         blackbox_stop(); // Stop recording, preserve data for download
         if (!rx_ok)
-          printf("DISARMED! (RX Signal Lost)\n");
+          printf("DISARMED! (RX Signal Lost - Failsafe Triggered)\n");
         else
           printf("DISARMED! (Switch Low)\n");
       }
@@ -372,8 +378,24 @@ void app_main(void) {
       }
     }
 
-    // LED Status
-    gpio_set_level(LED_PIN, system_armed ? 1 : 0);
+    // Low Battery Check (Slow)
+    debug_vbat = adc_read_battery_voltg();
+    bool low_battery_warning =
+        (debug_vbat < sys_cfg.low_bat_threshold); // Below 10.5V
+
+    // LED Status: Blink if low battery, otherwise solid when armed
+    if (low_battery_warning) {
+      // Blink LED as warning (toggle every ~25 iterations = ~250ms at 10ms
+      // loop)
+      led_blink_counter++;
+      if (led_blink_counter >= 25) {
+        led_blink_counter = 0;
+        gpio_set_level(LED_PIN, !gpio_get_level(LED_PIN)); // Toggle LED
+      }
+    } else {
+      led_blink_counter = 0;
+      gpio_set_level(LED_PIN, system_armed ? 1 : 0);
+    }
 
     // Check Emergency Stop Button
     if (gpio_get_level(BUTTON_PIN) == 0) {
@@ -383,16 +405,12 @@ void app_main(void) {
       error_state = true;
     }
 
-    // Low Battery Check (Slow)
-    debug_vbat = adc_read_battery_voltg();
-    if (system_armed && debug_vbat < sys_cfg.low_bat_threshold) {
-      // Debounce could be added here, but for safety, immediate warning/disarm
-      // For now, just print warning, maybe disarm if critical
-      if (debug_vbat < 9500) { // Critical 9.5V
-        system_armed = false;
-        mixer_arm(false);
-        printf("CRITICAL BATTERY! DISARMED.\n");
-      }
+    // Critical Battery Check - Disarm if critically low
+    if (system_armed && debug_vbat <= 9900) { // Critical <= 9.9V
+      system_armed = false;
+      mixer_arm(false);
+      gpio_set_level(LED_PIN, 1); // LED solid ON for critical battery
+      printf("CRITICAL BATTERY! DISARMED.\n");
     }
 
     if (control_loop_flag) {

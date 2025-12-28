@@ -9,28 +9,29 @@ system_config_t sys_cfg;
 
 void config_load_defaults(void) {
   // Roll Rate PID
-  // Tuned for F450 + 1400KV (High Gain motors - requires LOWER P)
-  sys_cfg.roll_kp = 0.35f;
-  sys_cfg.roll_ki = 0.18f;
-  sys_cfg.roll_kd = 0.1f;
+  // Tuned for F450 + 1400KV + 8045 props (Dec 2024 - 3.5hr tuning session)
+  // Conservative values for stable liftoff - increase gradually
+  sys_cfg.roll_kp = 0.08f; // Low P to prevent oscillation
+  sys_cfg.roll_ki = 0.01f; // Minimal I for rate loop
+  sys_cfg.roll_kd = 0.08f; // Reduced D to dampen oscillations
 
-  // Pitch Rate PID
-  sys_cfg.pitch_kp = 0.35f;
-  sys_cfg.pitch_ki = 0.18f;
-  sys_cfg.pitch_kd = 0.1f;
+  // Pitch Rate PID (same as roll for symmetric response)
+  sys_cfg.pitch_kp = 0.08f;
+  sys_cfg.pitch_ki = 0.01f;
+  sys_cfg.pitch_kd = 0.08f;
 
-  // Yaw Rate PID (disabled for testing)
-  sys_cfg.yaw_kp = 0.0f;
-  sys_cfg.yaw_ki = 0.0f;
-  sys_cfg.yaw_kd = 0.0f;
+  // Yaw Rate PID
+  sys_cfg.yaw_kp = 2.0f; // Reduced from 3.0 for smoother yaw
+  sys_cfg.yaw_ki = 0.02f;
+  sys_cfg.yaw_kd = 0.15f;
 
   // Angle PID (outer loop - provides rate setpoint to inner loop)
-  sys_cfg.angle_roll_kp = 3.0f; // Moderate response
-  sys_cfg.angle_roll_ki = 0.0f; // No I for now
-  sys_cfg.angle_roll_kd = 0.0f; // No D for now
+  sys_cfg.angle_roll_kp = 1.0f;  // Reduced for gentler self-leveling
+  sys_cfg.angle_roll_ki = 0.25f; // Helps correct steady-state drift
+  sys_cfg.angle_roll_kd = 0.0f;
 
-  sys_cfg.angle_pitch_kp = 3.0f;
-  sys_cfg.angle_pitch_ki = 0.0f;
+  sys_cfg.angle_pitch_kp = 1.0f;
+  sys_cfg.angle_pitch_ki = 0.25f;
   sys_cfg.angle_pitch_kd = 0.0f;
 
   // Limits (reduced for high-gain motors)

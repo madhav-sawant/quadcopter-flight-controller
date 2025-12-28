@@ -38,7 +38,11 @@ static const char *HTML_PAGE =
     "I:<input name=yi value=%.2f size=4> "
     "D:<input name=yd value=%.2f size=4><br>"
     "<b>Angle</b> Roll P:<input name=arp value=%.2f size=4> "
-    "Pitch P:<input name=app value=%.2f size=4><br><br>"
+    "I:<input name=ari value=%.2f size=4> "
+    "D:<input name=ard value=%.2f size=4><br>"
+    "Pitch P:<input name=app value=%.2f size=4> "
+    "I:<input name=api value=%.2f size=4> "
+    "D:<input name=apd value=%.2f size=4><br><br>"
     "<input type=submit value=SAVE></form>"
     "<form method=POST action=/r><input type=submit value=RESET></form>"
     "<hr><a href=/blackbox>Download Blackbox CSV</a> | "
@@ -69,7 +73,7 @@ static esp_err_t get_handler(httpd_req_t *req) {
   char query[64];
   if (httpd_req_get_url_query_str(req, query, sizeof(query)) == ESP_OK) {
     if (strstr(query, "msg=saved"))
-      msg = "Values Saved & Applied!";
+      msg = "Values Inserted into PID Controller!";
     else if (strstr(query, "msg=reset"))
       msg = "Values Reset to Defaults!";
     else if (strstr(query, "msg=calibrated"))
@@ -81,7 +85,9 @@ static esp_err_t get_handler(httpd_req_t *req) {
   snprintf(html, 2048, HTML_PAGE, adc_read_battery_voltg(), sys_cfg.roll_kp,
            sys_cfg.roll_ki, sys_cfg.roll_kd, sys_cfg.pitch_kp, sys_cfg.pitch_ki,
            sys_cfg.pitch_kd, sys_cfg.yaw_kp, sys_cfg.yaw_ki, sys_cfg.yaw_kd,
-           sys_cfg.angle_roll_kp, sys_cfg.angle_pitch_kp, msg, err_msg);
+           sys_cfg.angle_roll_kp, sys_cfg.angle_roll_ki, sys_cfg.angle_roll_kd,
+           sys_cfg.angle_pitch_kp, sys_cfg.angle_pitch_ki,
+           sys_cfg.angle_pitch_kd, msg, err_msg);
 
   httpd_resp_send(req, html, strlen(html));
   free(html);
@@ -113,7 +119,11 @@ static esp_err_t save_handler(httpd_req_t *req) {
   sys_cfg.yaw_ki = parse_float(buf, "yi", sys_cfg.yaw_ki);
   sys_cfg.yaw_kd = parse_float(buf, "yd", sys_cfg.yaw_kd);
   sys_cfg.angle_roll_kp = parse_float(buf, "arp", sys_cfg.angle_roll_kp);
+  sys_cfg.angle_roll_ki = parse_float(buf, "ari", sys_cfg.angle_roll_ki);
+  sys_cfg.angle_roll_kd = parse_float(buf, "ard", sys_cfg.angle_roll_kd);
   sys_cfg.angle_pitch_kp = parse_float(buf, "app", sys_cfg.angle_pitch_kp);
+  sys_cfg.angle_pitch_ki = parse_float(buf, "api", sys_cfg.angle_pitch_ki);
+  sys_cfg.angle_pitch_kd = parse_float(buf, "apd", sys_cfg.angle_pitch_kd);
 
   config_save_to_nvs();
   rate_control_init(); // Reload PID gains into controllers

@@ -1,6 +1,7 @@
 #include "angle_control.h"
 #include "../config/config.h"
 #include "../pid/pid.h"
+#include <stdbool.h>
 
 // Safety Limits
 #define MAX_RATE_SETPOINT_DPS 150.0f // Clamp desired rate to +/- 150 deg/s
@@ -41,3 +42,8 @@ void angle_control_update(float roll_actual_deg, float pitch_actual_deg,
 }
 
 const angle_output_t *angle_control_get_output(void) { return &angle_output; }
+
+void angle_control_freeze_integral(bool freeze) {
+  pid_freeze_integral(&pid_roll_angle, freeze);
+  pid_freeze_integral(&pid_pitch_angle, freeze);
+}

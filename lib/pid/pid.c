@@ -60,4 +60,7 @@ float pid_calculate(pid_controller_t *pid, float setpoint, float measurement,
 
 void pid_freeze_integral(pid_controller_t *pid, bool freeze) {
   pid->integral_frozen = freeze;
+  if (freeze) {
+    pid->integral = 0.0f;
+  }
 }
