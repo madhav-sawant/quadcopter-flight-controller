@@ -57,6 +57,10 @@
 #define LED_PIN 2
 #define BUTTON_PIN 0 // Boot button for emergency stop
 
+// Throttle Limit for Tuning (prevents climbing too high)
+// Set to 1400 during tuning, change to 2000 for normal flight
+#define TUNING_THROTTLE_LIMIT 1400
+
 // Control loop frequency (250 Hz)
 #define CONTROL_LOOP_FREQ_HZ 250
 #define CONTROL_LOOP_PERIOD_US (1000000 / CONTROL_LOOP_FREQ_HZ)
@@ -170,8 +174,8 @@ static void IRAM_ATTR control_loop_callback(void *arg) {
   // Safety: Ensure throttle doesn't drop below min or exceed max
   if (throttle < 1000)
     throttle = 1000;
-  if (throttle > 2000)
-    throttle = 2000;
+  if (throttle > TUNING_THROTTLE_LIMIT) // Limited for tuning safety
+    throttle = TUNING_THROTTLE_LIMIT;
 
   // Integral Anti-Windup: Freeze I-term when throttle is low (on ground)
   bool freeze_integral = (throttle < 1200);
