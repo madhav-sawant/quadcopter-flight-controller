@@ -23,8 +23,22 @@ void imu_calibrate_gyro(void);
 void imu_calibrate_accel(void);
 
 // NVS Calibration Storage (uses separate namespace from PID config)
-
 bool imu_calibration_load_from_nvs(void);
 void imu_calibration_save_to_nvs(void);
+
+// Calibration data structure for external access
+typedef struct {
+  float gyro_bias_x;
+  float gyro_bias_y;
+  float gyro_bias_z;
+  float accel_offset_pitch;
+  float accel_offset_roll;
+} imu_calibration_t;
+
+// Get current calibration values (non-blocking, safe to call anytime)
+void imu_get_calibration(imu_calibration_t *cal);
+
+// Print calibration values to console
+void imu_print_calibration(void);
 
 #endif // IMU_H

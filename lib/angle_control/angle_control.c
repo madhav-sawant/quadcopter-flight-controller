@@ -13,12 +13,12 @@ static pid_controller_t pid_pitch_angle;
 static angle_output_t angle_output;
 
 void angle_control_init(void) {
-  // Initialize PIDs with config values
+  // Initialize PIDs with config values (full P/I/D for outer loop)
   // Output limit is the Max Rate we want to command
-  pid_init(&pid_roll_angle, sys_cfg.angle_roll_kp, 0.0f, 0.0f,
-           MAX_RATE_SETPOINT_DPS, 0.0f);
-  pid_init(&pid_pitch_angle, sys_cfg.angle_pitch_kp, 0.0f, 0.0f,
-           MAX_RATE_SETPOINT_DPS, 0.0f);
+  pid_init(&pid_roll_angle, sys_cfg.angle_roll_kp, sys_cfg.angle_roll_ki,
+           sys_cfg.angle_roll_kd, MAX_RATE_SETPOINT_DPS, 50.0f); // I-limit 50
+  pid_init(&pid_pitch_angle, sys_cfg.angle_pitch_kp, sys_cfg.angle_pitch_ki,
+           sys_cfg.angle_pitch_kd, MAX_RATE_SETPOINT_DPS, 50.0f);
 
   angle_output.roll_rate_setpoint = 0.0f;
   angle_output.pitch_rate_setpoint = 0.0f;

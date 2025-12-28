@@ -19,17 +19,31 @@ void adc_init(void) {
       adc_oneshot_config_channel(adc1_handle, ADC_CHANNEL, &config));
 }
 
+// Static for IIR smoothing
+static uint16_t adc_filtered_raw = 0;
+
 static uint16_t adc_read_raw(void) {
   int raw_val = 0;
   uint32_t sum = 0;
 
-  // Average 64 samples
-  for (int i = 0; i < 64; i++) {
+  // Average 16 samples (down from 64 for faster reads)
+  for (int i = 0; i < 16; i++) {
     ESP_ERROR_CHECK(adc_oneshot_read(adc1_handle, ADC_CHANNEL, &raw_val));
     sum += raw_val;
   }
 
-  return (uint16_t)(sum / 64);
+  uint16_t current = (uint16_t)(sum / 16);
+
+  // IIR low-pass filter: alpha = 0.25 (smooth but responsive)
+  // filtered = alpha * current + (1-alpha) * previous
+  if (adc_filtered_raw == 0) {
+    adc_filtered_raw = current; // Initialize on first read
+  } else {
+    adc_filtered_raw =
+        (current >> 2) + (adc_filtered_raw - (adc_filtered_raw >> 2));
+  }
+
+  return adc_filtered_raw;
 }
 
 static uint16_t adc_read_voltage(uint16_t raw) {

@@ -9,30 +9,36 @@ system_config_t sys_cfg;
 
 void config_load_defaults(void) {
   // Roll Rate PID
-  sys_cfg.roll_kp = 0.8f;
-  sys_cfg.roll_ki = 0.2f;
-  sys_cfg.roll_kd = 0.05f;
+  // Tuned for F450 + 1400KV (High Gain motors - requires LOWER P)
+  sys_cfg.roll_kp = 0.35f;
+  sys_cfg.roll_ki = 0.18f;
+  sys_cfg.roll_kd = 0.1f;
 
   // Pitch Rate PID
-  sys_cfg.pitch_kp = 0.8f;
-  sys_cfg.pitch_ki = 0.2f;
-  sys_cfg.pitch_kd = 0.05f;
+  sys_cfg.pitch_kp = 0.35f;
+  sys_cfg.pitch_ki = 0.18f;
+  sys_cfg.pitch_kd = 0.1f;
 
   // Yaw Rate PID (disabled for testing)
   sys_cfg.yaw_kp = 0.0f;
   sys_cfg.yaw_ki = 0.0f;
   sys_cfg.yaw_kd = 0.0f;
 
-  // Angle PID (disabled - rate mode only)
-  sys_cfg.angle_roll_kp = 0.0f;
-  sys_cfg.angle_pitch_kp = 0.0f;
+  // Angle PID (outer loop - provides rate setpoint to inner loop)
+  sys_cfg.angle_roll_kp = 3.0f; // Moderate response
+  sys_cfg.angle_roll_ki = 0.0f; // No I for now
+  sys_cfg.angle_roll_kd = 0.0f; // No D for now
 
-  // Limits
-  sys_cfg.rate_output_limit = 400.0f;
-  sys_cfg.rate_integral_limit = 200.0f;
+  sys_cfg.angle_pitch_kp = 3.0f;
+  sys_cfg.angle_pitch_ki = 0.0f;
+  sys_cfg.angle_pitch_kd = 0.0f;
 
-  // Safety
-  sys_cfg.crash_angle_deg = 60.0f;
+  // Limits (reduced for high-gain motors)
+  sys_cfg.rate_output_limit = 350.0f;
+  sys_cfg.rate_integral_limit = 100.0f;
+
+  // Safety (conservative for tuning - change to 60 when stable)
+  sys_cfg.crash_angle_deg = 45.0f;
   sys_cfg.low_bat_threshold = 10500; // 10.5V
 }
 
@@ -56,15 +62,34 @@ void config_save_to_nvs(void) {
   nvs_set_blob(handle, "yaw_kd", &sys_cfg.yaw_kd, sizeof(float));
 
   nvs_set_blob(handle, "ang_roll_kp", &sys_cfg.angle_roll_kp, sizeof(float));
+  nvs_set_blob(handle, "ang_roll_ki", &sys_cfg.angle_roll_ki, sizeof(float));
+  nvs_set_blob(handle, "ang_roll_kd", &sys_cfg.angle_roll_kd, sizeof(float));
   nvs_set_blob(handle, "ang_pitch_kp", &sys_cfg.angle_pitch_kp, sizeof(float));
+  nvs_set_blob(handle, "ang_pitch_ki", &sys_cfg.angle_pitch_ki, sizeof(float));
+  nvs_set_blob(handle, "ang_pitch_kd", &sys_cfg.angle_pitch_kd, sizeof(float));
 
   nvs_commit(handle);
   nvs_close(handle);
 }
 
-static bool load_float(nvs_handle_t handle, const char *key, float *out) {
+// Load float with optional min/max validation
+static bool load_float_clamped(nvs_handle_t handle, const char *key, float *out,
+                               float min_val, float max_val) {
   size_t len = sizeof(float);
-  return nvs_get_blob(handle, key, out, &len) == ESP_OK;
+  float val;
+  if (nvs_get_blob(handle, key, &val, &len) != ESP_OK)
+    return false;
+  // Clamp to sane range to prevent corrupt NVS causing issues
+  if (val < min_val)
+    val = min_val;
+  else if (val > max_val)
+    val = max_val;
+  *out = val;
+  return true;
+}
+
+static bool load_float(nvs_handle_t handle, const char *key, float *out) {
+  return load_float_clamped(handle, key, out, -1000.0f, 1000.0f);
 }
 
 bool config_load_from_nvs(void) {
@@ -88,8 +113,19 @@ bool config_load_from_nvs(void) {
   success &= load_float(handle, "yaw_ki", &sys_cfg.yaw_ki);
   success &= load_float(handle, "yaw_kd", &sys_cfg.yaw_kd);
 
-  success &= load_float(handle, "ang_roll_kp", &sys_cfg.angle_roll_kp);
-  success &= load_float(handle, "ang_pitch_kp", &sys_cfg.angle_pitch_kp);
+  // Load angle PID values with validation (0-20 is sane for angle P)
+  success &= load_float_clamped(handle, "ang_roll_kp", &sys_cfg.angle_roll_kp,
+                                0.0f, 20.0f);
+  load_float_clamped(handle, "ang_roll_ki", &sys_cfg.angle_roll_ki, 0.0f,
+                     5.0f); // Optional, don't fail
+  load_float_clamped(handle, "ang_roll_kd", &sys_cfg.angle_roll_kd, 0.0f,
+                     1.0f); // Optional
+  success &= load_float_clamped(handle, "ang_pitch_kp", &sys_cfg.angle_pitch_kp,
+                                0.0f, 20.0f);
+  load_float_clamped(handle, "ang_pitch_ki", &sys_cfg.angle_pitch_ki, 0.0f,
+                     5.0f); // Optional
+  load_float_clamped(handle, "ang_pitch_kd", &sys_cfg.angle_pitch_kd, 0.0f,
+                     1.0f); // Optional
 
   nvs_close(handle);
   return success;

@@ -32,3 +32,9 @@ void rate_control_update(float desired_roll_rate, float desired_pitch_rate,
 }
 
 const rate_output_t *rate_control_get_output(void) { return &rate_output; }
+
+void rate_control_freeze_integral(bool freeze) {
+  pid_freeze_integral(&pid_roll_rate, freeze);
+  pid_freeze_integral(&pid_pitch_rate, freeze);
+  pid_freeze_integral(&pid_yaw_rate, freeze);
+}

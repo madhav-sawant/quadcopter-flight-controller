@@ -37,8 +37,11 @@ void rx_init(void) {
   for (int i = 0; i < RX_CHANNEL_COUNT; i++) {
     rx_channels[i] = 1500;
   }
-  // Throttle (usually ch 2 or 3 depending on map) to 1000 for safety
+  // Throttle (channel 2) to MIN for safety failsafe
   rx_channels[2] = 1000;
+  // Aux channels to low for safety
+  rx_channels[4] = 1000; // Arm switch
+  rx_channels[5] = 1000;
 
   gpio_config_t io_conf = {
       .pin_bit_mask = (1ULL << RX_PIN),
@@ -74,11 +77,17 @@ bool rx_is_connected(void) {
 uint16_t rx_get_channel(uint8_t channel_index) {
   if (channel_index >= RX_CHANNEL_COUNT)
     return 0;
-  return rx_channels[channel_index];
+  // Atomic read to prevent torn reads during ISR update
+  portDISABLE_INTERRUPTS();
+  uint16_t val = rx_channels[channel_index];
+  portENABLE_INTERRUPTS();
+  return val;
 }
 
 void rx_get_all(uint16_t *channels) {
+  portDISABLE_INTERRUPTS();
   for (int i = 0; i < RX_CHANNEL_COUNT; i++) {
     channels[i] = rx_channels[i];
   }
+  portENABLE_INTERRUPTS();
 }

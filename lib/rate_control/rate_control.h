@@ -18,4 +18,7 @@ void rate_control_update(float desired_roll_rate, float desired_pitch_rate,
                          float gyro_pitch_rate, float gyro_yaw_rate);
 const rate_output_t *rate_control_get_output(void);
 
+// Freeze/unfreeze integral accumulation (prevents windup during ground idle)
+void rate_control_freeze_integral(bool freeze);
+
 #endif // RATE_CONTROL_H

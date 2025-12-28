@@ -3,6 +3,7 @@
 #include "esp_timer.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/queue.h"
+#include "freertos/semphr.h"
 #include "freertos/task.h"
 #include <string.h>
 
@@ -13,6 +14,9 @@ static blackbox_entry_t buffer[BLACKBOX_MAX_ENTRIES];
 static volatile uint16_t write_index = 0;
 static volatile uint16_t entry_count = 0;
 static volatile bool recording = false; // Start OFF, enable on ARM
+
+// Mutex for buffer access during reads
+static SemaphoreHandle_t buffer_mutex = NULL;
 
 // FreeRTOS queue for passing entries from control loop to blackbox task
 #define BLACKBOX_QUEUE_SIZE 16

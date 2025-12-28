@@ -28,7 +28,7 @@
 #define I2C_MASTER_RX_BUF_DISABLE 0
 #define I2C_MASTER_TIMEOUT_MS 1000
 
-#define COMPLEMENTARY_ALPHA 0.98f
+#define COMPLEMENTARY_ALPHA 0.96f // Lower alpha = faster drift correction
 #define GYRO_SCALE_FACTOR 16.4f
 #define ACCEL_SCALE_FACTOR 4096.0f
 #define RAD_TO_DEG 57.2957795f
@@ -172,6 +172,8 @@ void imu_calibrate_accel(void) {
 }
 
 void imu_read(float dt_sec) {
+  static bool first_read = true; // Track first read for angle initialization
+
   uint8_t buffer[14];
   if (read_registers(REG_ACCEL_XOUT_H, buffer, 14) != ESP_OK) {
     printf("IMU: Read failed!\n");
@@ -193,8 +195,8 @@ void imu_read(float dt_sec) {
   imu_state.gyro_z_dps = (gz_raw / GYRO_SCALE_FACTOR) - gyro_bias_z;
 
   // ============================================================================
-  // TEST 3: COMPLEMENTARY FILTER (ACTIVE)
-  // Combines Gyro (fast) + Accel (stable)
+  // COMPLEMENTARY FILTER
+  // Combines Gyro (fast, no drift short-term) + Accel (stable, noisy)
   // ============================================================================
 
   float accel_pitch = atan2f(imu_state.accel_x_g,
@@ -208,12 +210,25 @@ void imu_read(float dt_sec) {
   accel_pitch -= accel_offset_pitch;
   accel_roll -= accel_offset_roll;
 
-  imu_state.pitch_deg = COMPLEMENTARY_ALPHA * (imu_state.pitch_deg +
-                                               imu_state.gyro_y_dps * dt_sec) +
-                        (1.0f - COMPLEMENTARY_ALPHA) * accel_pitch;
-  imu_state.roll_deg = COMPLEMENTARY_ALPHA * (imu_state.roll_deg +
-                                              imu_state.gyro_x_dps * dt_sec) +
-                       (1.0f - COMPLEMENTARY_ALPHA) * accel_roll;
+  // CRITICAL: On first read, initialize angles directly from accelerometer
+  // This prevents slow convergence issues if drone is not perfectly level at
+  // boot
+  if (first_read) {
+    imu_state.pitch_deg = accel_pitch;
+    imu_state.roll_deg = accel_roll;
+    first_read = false;
+    printf("IMU: Angles initialized from accel - Roll: %.2f, Pitch: %.2f\n",
+           accel_roll, accel_pitch);
+  } else {
+    // Normal complementary filter operation
+    imu_state.pitch_deg =
+        COMPLEMENTARY_ALPHA *
+            (imu_state.pitch_deg + imu_state.gyro_y_dps * dt_sec) +
+        (1.0f - COMPLEMENTARY_ALPHA) * accel_pitch;
+    imu_state.roll_deg = COMPLEMENTARY_ALPHA * (imu_state.roll_deg +
+                                                imu_state.gyro_x_dps * dt_sec) +
+                         (1.0f - COMPLEMENTARY_ALPHA) * accel_roll;
+  }
 }
 
 const imu_data_t *imu_get_data(void) { return &imu_state; }
@@ -311,4 +326,33 @@ void imu_calibration_save_to_nvs(void) {
          gyro_bias_z);
   printf("  Accel Offset: Pitch=%.4f, Roll=%.4f\n", accel_offset_pitch,
          accel_offset_roll);
+}
+
+/* -------------------------------------------------------------------------- */
+/*                   Calibration Access Functions */
+/* -------------------------------------------------------------------------- */
+
+void imu_get_calibration(imu_calibration_t *cal) {
+  if (cal == NULL)
+    return;
+  cal->gyro_bias_x = gyro_bias_x;
+  cal->gyro_bias_y = gyro_bias_y;
+  cal->gyro_bias_z = gyro_bias_z;
+  cal->accel_offset_pitch = accel_offset_pitch;
+  cal->accel_offset_roll = accel_offset_roll;
+}
+
+void imu_print_calibration(void) {
+  printf("\n========================================\n");
+  printf("       IMU CALIBRATION VALUES\n");
+  printf("========================================\n");
+  printf("Gyro Bias (deg/s):\n");
+  printf("  X: %+.4f\n", gyro_bias_x);
+  printf("  Y: %+.4f\n", gyro_bias_y);
+  printf("  Z: %+.4f\n", gyro_bias_z);
+  printf("----------------------------------------\n");
+  printf("Accel Offset (degrees):\n");
+  printf("  Pitch: %+.4f\n", accel_offset_pitch);
+  printf("  Roll:  %+.4f\n", accel_offset_roll);
+  printf("========================================\n\n");
 }
