@@ -2,8 +2,9 @@
 #include <stdbool.h>
 
 // D-term low-pass filter coefficient
-// At 250Hz loop, alpha=0.2 gives ~40Hz cutoff
-#define D_TERM_LPF_ALPHA 0.2f
+// At 250Hz loop, alpha=0.15 gives ~30Hz cutoff - stronger filtering for high-KV
+// vibration
+#define D_TERM_LPF_ALPHA 0.15f
 
 void pid_init(pid_controller_t *pid, float kp, float ki, float kd,
               float output_limit, float integral_limit) {
@@ -60,7 +61,6 @@ float pid_calculate(pid_controller_t *pid, float setpoint, float measurement,
 
 void pid_freeze_integral(pid_controller_t *pid, bool freeze) {
   pid->integral_frozen = freeze;
-  if (freeze) {
-    pid->integral = 0.0f;
-  }
+  // Don't reset integral on freeze - just pause accumulation
+  // Integral is reset on arm via pid_init()
 }

@@ -38,11 +38,20 @@ void angle_control_update(float roll_actual_deg, float pitch_actual_deg,
  * @return const angle_output_t* Pointer to the output struct
  */
 const angle_output_t *angle_control_get_output(void);
+float angle_control_get_i_roll(void);
+float angle_control_get_i_pitch(void);
+bool angle_control_in_recovery(void);
 
 /**
  * @brief Freeze/unfreeze integral accumulation for Angle PIDs
  * Call with true when throttle is low to prevent I-term windup on ground.
  */
 void angle_control_freeze_integral(bool freeze);
+
+/**
+ * @brief Check if controller is in recovery mode (angle > 45°)
+ * @return true if actively recovering from extreme angle
+ */
+bool angle_control_in_recovery(void);
 
 #endif // ANGLE_CONTROL_H

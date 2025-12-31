@@ -4,8 +4,8 @@
 #include <stdbool.h>
 #include <stdint.h>
 
-#define MIXER_IDLE_THROTTLE 1100
-#define MIXER_MAX_THROTTLE 1850
+#define MIXER_IDLE_THROTTLE 1100 // Back to 1100 to allow motor differentiation
+#define MIXER_MAX_THROTTLE 1500  // Limited for safe testing (was 1850)
 #define MIXER_STOP_CMD 1000
 
 void mixer_init(void);

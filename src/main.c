@@ -29,6 +29,7 @@
 #include "driver/gpio.h"
 #include "esp_attr.h"
 #include "esp_err.h"
+#include "esp_task_wdt.h"
 #include "esp_timer.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
@@ -79,12 +80,13 @@
 
 static volatile bool control_loop_flag = false;
 static int debug_counter = 0;
-static int blackbox_counter = 0;  // Counter for 50Hz blackbox logging
+static int blackbox_counter = 0;  // Counter for 83Hz blackbox logging
 static int led_blink_counter = 0; // Counter for low battery LED blinking
 
 // System State
 bool system_armed = false;
 static bool error_state = false;
+char system_status_msg[64] = "System Ready"; // Global status message
 
 // Debug data
 static float debug_gyro[3];
@@ -95,141 +97,236 @@ static uint16_t debug_vbat = 0;
 static int64_t debug_exec_time_us = 0;
 
 /* -------------------------------------------------------------------------- */
-/*                          Control Loop (500 Hz Timer)                       */
+/*                   Control Loop Task (Core 1 - 250 Hz)                      */
 /* -------------------------------------------------------------------------- */
 
-static void IRAM_ATTR control_loop_callback(void *arg) {
+// Control loop runs as a dedicated FreeRTOS task pinned to Core 1
+// Core 0: WiFi, Webserver, Logger (background I/O)
+// Core 1: Control Loop, Sensor Fusion, PWM (real-time flight critical)
+
+static void control_loop_task(void *arg) {
   (void)arg;
 
-  int64_t start_time = esp_timer_get_time();
+  // Use esp_timer for precise 4ms (250Hz) timing since FreeRTOS tick is 10ms
+  const int64_t cycle_period_us =
+      1000000 / CONTROL_LOOP_FREQ_HZ; // 4000us for 250Hz
+  int64_t next_cycle_time = esp_timer_get_time();
 
-  // 1. Read IMU
-  imu_read(1.0f / CONTROL_LOOP_FREQ_HZ);
-  const imu_data_t *imu = imu_get_data();
+  printf("Control Loop Task started on Core %d\n", xPortGetCoreID());
 
-  // 2. Safety Checks (Crash detection)
-  // Angle-based: if roll or pitch angle is too high, disarm
-  if (fabs(imu->roll_deg) > sys_cfg.crash_angle_deg ||
-      fabs(imu->pitch_deg) > sys_cfg.crash_angle_deg) {
-    mixer_arm(false);
-    system_armed = false;
-    error_state = true;
-  }
+  // Register this task with the Task Watchdog Timer (TWDT)
+  // This is necessary because Core 1 runs at high priority and never yields
+  esp_task_wdt_add(NULL);
 
-  // Gyro rate-based: detect rapid rotation (impact/crash) even if filtered
-  // angles lag 500 deg/s threshold catches most crash scenarios
-  const float CRASH_GYRO_RATE_DPS = 500.0f;
-  if (fabs(imu->gyro_x_dps) > CRASH_GYRO_RATE_DPS ||
-      fabs(imu->gyro_y_dps) > CRASH_GYRO_RATE_DPS ||
-      fabs(imu->gyro_z_dps) > CRASH_GYRO_RATE_DPS) {
-    mixer_arm(false);
-    system_armed = false;
-    error_state = true;
-  }
+  while (1) {
+    // Feed the watchdog at each iteration
+    esp_task_wdt_reset();
+    int64_t start_time = esp_timer_get_time();
 
-  // 3. Read RX Channels
-  uint16_t rx_roll = rx_get_channel(0);
-  uint16_t rx_pitch = rx_get_channel(1);
-  uint16_t rx_thr = rx_get_channel(2);
-  uint16_t rx_yaw = rx_get_channel(3);
+    // 1. Read IMU
+    imu_read(1.0f / CONTROL_LOOP_FREQ_HZ);
+    const imu_data_t *imu = imu_get_data();
 
-  // Map Yaw (always rate controlled)
-  float target_yaw_rate = 0.0f;
-  if (abs(rx_yaw - 1500) > RC_DEADBAND_US) {
-    target_yaw_rate = (float)(rx_yaw - 1500) / 500.0f * RC_MAX_YAW_RATE_DPS;
-  }
+    // 2. Safety Checks (Crash detection)
+    // Angle-based: if roll or pitch angle is too high, disarm
+    if (fabs(imu->roll_deg) > sys_cfg.crash_angle_deg ||
+        fabs(imu->pitch_deg) > sys_cfg.crash_angle_deg) {
+      mixer_arm(false);
+      system_armed = false;
+      error_state = true;
+      snprintf(system_status_msg, sizeof(system_status_msg),
+               "CRASH DETECTED: Angle > %.0f deg", sys_cfg.crash_angle_deg);
+    }
 
-  // Map Roll/Pitch Stick -> Angle Target
-  float target_roll = 0.0f;
-  if (abs(rx_roll - 1500) > RC_DEADBAND_US) {
-    target_roll = (float)(rx_roll - 1500) / 500.0f * RC_MAX_ANGLE_DEG;
-  }
+    // Gyro rate-based: detect rapid rotation (impact/crash) even if filtered
+    // angles lag 500 deg/s threshold catches most crash scenarios
+    const float CRASH_GYRO_RATE_DPS = 500.0f;
+    if (fabs(imu->gyro_x_dps) > CRASH_GYRO_RATE_DPS ||
+        fabs(imu->gyro_y_dps) > CRASH_GYRO_RATE_DPS ||
+        fabs(imu->gyro_z_dps) > CRASH_GYRO_RATE_DPS) {
+      mixer_arm(false);
+      system_armed = false;
+      error_state = true;
+      snprintf(system_status_msg, sizeof(system_status_msg),
+               "CRASH DETECTED: Gyro > %.0f dps", CRASH_GYRO_RATE_DPS);
+    }
 
-  float target_pitch = 0.0f;
-  if (abs(rx_pitch - 1500) > RC_DEADBAND_US) {
-    target_pitch = (float)(rx_pitch - 1500) / 500.0f * RC_MAX_ANGLE_DEG;
-  }
+    // 3. Read RX Channels
+    uint16_t rx_roll = rx_get_channel(0);
+    uint16_t rx_pitch = rx_get_channel(1);
+    uint16_t rx_thr = rx_get_channel(2);
+    uint16_t rx_yaw = rx_get_channel(3);
 
-  // 4. Cascade Control: Angle -> Rate
-  // Angle loop output = rate setpoint for Rate loop
-  // When Angle P = 0, angle_control outputs 0, so Rate loop targets 0 deg/s
-  angle_control_update(imu->roll_deg, imu->pitch_deg, target_roll, target_pitch,
-                       1.0f / CONTROL_LOOP_FREQ_HZ);
-  const angle_output_t *angle_out = angle_control_get_output();
+    // Map Yaw (always rate controlled)
+    float target_yaw_rate = 0.0f;
+    if (abs(rx_yaw - 1500) > RC_DEADBAND_US) {
+      target_yaw_rate = (float)(rx_yaw - 1500) / 500.0f * RC_MAX_YAW_RATE_DPS;
+    }
 
-  // Rate loop: try to achieve the rate setpoint from angle loop (0 when P=0)
-  rate_control_update(angle_out->roll_rate_setpoint,
-                      angle_out->pitch_rate_setpoint, target_yaw_rate,
-                      imu->gyro_x_dps, imu->gyro_y_dps, imu->gyro_z_dps);
+    // Map Roll/Pitch Stick -> Angle Target
+    float target_roll = 0.0f;
+    if (abs(rx_roll - 1500) > RC_DEADBAND_US) {
+      target_roll = (float)(rx_roll - 1500) / 500.0f * RC_MAX_ANGLE_DEG;
+    }
 
-  // 5. Update Mixer
-  const rate_output_t *pid_out = rate_control_get_output();
+    float target_pitch = 0.0f;
+    if (abs(rx_pitch - 1500) > RC_DEADBAND_US) {
+      target_pitch = (float)(rx_pitch - 1500) / 500.0f * RC_MAX_ANGLE_DEG;
+    }
 
-  // Throttle:
-  // DIRECT RX CONTROL
-  // If armed, use the mapped RX throttle.
-  // If disarmed, mixer handles it (stops).
-  uint16_t throttle = system_armed ? rx_thr : 1000;
+    // Update webserver live display with target angles
+    webserver_set_targets(target_roll, target_pitch);
 
-  // Safety: Ensure throttle doesn't drop below min or exceed max
-  if (throttle < 1000)
-    throttle = 1000;
-  if (throttle > TUNING_THROTTLE_LIMIT) // Limited for tuning safety
-    throttle = TUNING_THROTTLE_LIMIT;
+    // 4. Cascade Control: Angle -> Rate
+    // Angle loop output = rate setpoint for Rate loop
+    // When Angle P = 0, angle_control outputs 0, so Rate loop targets 0 deg/s
+    angle_control_update(imu->roll_deg, imu->pitch_deg, target_roll,
+                         target_pitch, 1.0f / CONTROL_LOOP_FREQ_HZ);
+    const angle_output_t *angle_out = angle_control_get_output();
 
-  // Integral Anti-Windup: Freeze I-term when throttle is low (on ground)
-  bool freeze_integral = (throttle < 1200);
-  rate_control_freeze_integral(freeze_integral);
-  angle_control_freeze_integral(freeze_integral);
+    // Rate loop: try to achieve the rate setpoint from angle loop (0 when P=0)
+    rate_control_update(angle_out->roll_rate_setpoint,
+                        angle_out->pitch_rate_setpoint, target_yaw_rate,
+                        imu->gyro_x_dps, imu->gyro_y_dps, imu->gyro_z_dps);
 
-  mixer_update(throttle, pid_out->roll, pid_out->pitch, pid_out->yaw);
+    // 5. Update Mixer
+    const rate_output_t *pid_out = rate_control_get_output();
 
-  int64_t end_time = esp_timer_get_time();
+    // Throttle:
+    // DIRECT RX CONTROL
+    // If armed, use the mapped RX throttle.
+    // If disarmed, mixer handles it (stops).
+    uint16_t throttle = system_armed ? rx_thr : 1000;
 
-  // 5. Store Debug Data
-  if (++debug_counter >= DEBUG_PRINT_DIVIDER) {
-    debug_counter = 0;
-    control_loop_flag = true;
+    // Safety: Ensure throttle doesn't drop below min or exceed max
+    if (throttle < 1000)
+      throttle = 1000;
+    if (throttle > TUNING_THROTTLE_LIMIT) // Limited for tuning safety
+      throttle = TUNING_THROTTLE_LIMIT;
 
-    debug_gyro[0] = imu->gyro_x_dps;
-    debug_gyro[1] = imu->gyro_y_dps;
-    debug_gyro[2] = imu->gyro_z_dps;
+    // Integral Anti-Windup: Freeze I-term when throttle is low (on ground)
+    // Threshold lowered from 1200 to 1080 to allow I-term during low-throttle
+    // tuning
+    bool freeze_integral = (throttle < 1080);
+    rate_control_freeze_integral(freeze_integral);
+    angle_control_freeze_integral(freeze_integral);
 
-    debug_angle[0] = imu->roll_deg;
-    debug_angle[1] = imu->pitch_deg;
+    mixer_update(throttle, pid_out->roll, pid_out->pitch, pid_out->yaw);
 
-    debug_pid[0] = pid_out->roll;
-    debug_pid[1] = pid_out->pitch;
-    debug_pid[2] = pid_out->yaw;
+    int64_t end_time = esp_timer_get_time();
 
-    mixer_get_outputs(&debug_motors[0], &debug_motors[1], &debug_motors[2],
-                      &debug_motors[3]);
+    // 5. Store Debug Data
+    if (++debug_counter >= DEBUG_PRINT_DIVIDER) {
+      debug_counter = 0;
+      control_loop_flag = true;
 
-    debug_exec_time_us = end_time - start_time;
-  }
+      debug_gyro[0] = imu->gyro_x_dps;
+      debug_gyro[1] = imu->gyro_y_dps;
+      debug_gyro[2] = imu->gyro_z_dps;
 
-  // 6. Blackbox Logging (50Hz - every 10th iteration) - ONLY WHEN ARMED
-  if (system_armed && ++blackbox_counter >= BLACKBOX_LOG_DIVIDER) {
-    blackbox_counter = 0;
+      debug_angle[0] = imu->roll_deg;
+      debug_angle[1] = imu->pitch_deg;
 
-    blackbox_entry_t entry = {
-        .timestamp_ms = (uint32_t)(esp_timer_get_time() / 1000),
-        .gyro_x = imu->gyro_x_dps,
-        .gyro_y = imu->gyro_y_dps,
-        .gyro_z = imu->gyro_z_dps,
-        .angle_roll = imu->roll_deg,
-        .angle_pitch = imu->pitch_deg,
-        .pid_roll = pid_out->roll,
-        .pid_pitch = pid_out->pitch,
-        .pid_yaw = pid_out->yaw,
-        .motor = {debug_motors[0], debug_motors[1], debug_motors[2],
-                  debug_motors[3]},
-        .throttle = throttle,
-        .flags = (system_armed ? BLACKBOX_FLAG_ARMED : 0) |
-                 (error_state ? BLACKBOX_FLAG_ERROR : 0)};
-    blackbox_log(&entry);
-  } else if (!system_armed) {
-    blackbox_counter = 0; // Reset counter when disarmed
+      debug_pid[0] = pid_out->roll;
+      debug_pid[1] = pid_out->pitch;
+      debug_pid[2] = pid_out->yaw;
+
+      mixer_get_outputs(&debug_motors[0], &debug_motors[1], &debug_motors[2],
+                        &debug_motors[3]);
+
+      debug_exec_time_us = end_time - start_time;
+    }
+
+    // 6. Blackbox Logging (50Hz - every 10th iteration) - ONLY WHEN ARMED
+    if (system_armed && ++blackbox_counter >= BLACKBOX_LOG_DIVIDER) {
+      blackbox_counter = 0;
+
+      // Calculate expanded flags
+      uint16_t bb_flags = 0;
+      if (system_armed)
+        bb_flags |= BLACKBOX_FLAG_ARMED;
+      if (error_state)
+        bb_flags |= BLACKBOX_FLAG_ERROR;
+      if (angle_control_in_recovery())
+        bb_flags |= BLACKBOX_FLAG_RECOVERY;
+      if (freeze_integral)
+        bb_flags |= BLACKBOX_FLAG_I_FROZEN;
+      // Add low battery flag
+      if (debug_vbat > 0 && debug_vbat < sys_cfg.low_bat_threshold)
+        bb_flags |= BLACKBOX_FLAG_LOW_BAT;
+      // Gyro saturation check
+      if (fabs(imu->gyro_x_dps) > 400 || fabs(imu->gyro_y_dps) > 400)
+        bb_flags |= BLACKBOX_FLAG_GYRO_SAT;
+      // PID saturation check
+      if (fabs(pid_out->roll) > sys_cfg.rate_output_limit * 0.95f)
+        bb_flags |= BLACKBOX_FLAG_PID_SAT;
+
+      blackbox_entry_t entry = {
+          // Time & Status
+          .timestamp_ms = (uint32_t)(esp_timer_get_time() / 1000),
+          .flags = bb_flags,
+
+          // Raw IMU Data
+          .gyro_x = imu->gyro_x_dps,
+          .gyro_y = imu->gyro_y_dps,
+          .gyro_z = imu->gyro_z_dps,
+          .accel_x = imu->accel_x_g,
+          .accel_y = imu->accel_y_g,
+          .accel_z = imu->accel_z_g,
+
+          // Fused Angles
+          .angle_roll = imu->roll_deg,
+          .angle_pitch = imu->pitch_deg,
+
+          // Angle Loop (Outer) - setpoints and errors
+          .angle_setpoint_roll = target_roll,
+          .angle_setpoint_pitch = target_pitch,
+          .angle_error_roll = target_roll - imu->roll_deg,
+          .angle_error_pitch = target_pitch - imu->pitch_deg,
+          .angle_i_term_roll = angle_control_get_i_roll(),
+          .angle_i_term_pitch = angle_control_get_i_pitch(),
+
+          // Rate Loop (Inner) - setpoints and errors
+          .rate_setpoint_roll = angle_out->roll_rate_setpoint,
+          .rate_setpoint_pitch = angle_out->pitch_rate_setpoint,
+          .rate_error_roll = angle_out->roll_rate_setpoint - imu->gyro_x_dps,
+          .rate_error_pitch = angle_out->pitch_rate_setpoint - imu->gyro_y_dps,
+          .rate_i_term_roll = rate_control_get_i_roll(),
+          .rate_i_term_pitch = rate_control_get_i_pitch(),
+          .rate_i_term_yaw = rate_control_get_i_yaw(),
+
+          // PID Outputs
+          .pid_roll = pid_out->roll,
+          .pid_pitch = pid_out->pitch,
+          .pid_yaw = pid_out->yaw,
+
+          // Motors
+          .motor = {debug_motors[0], debug_motors[1], debug_motors[2],
+                    debug_motors[3]},
+
+          // RC Inputs
+          .rc_throttle = throttle,
+          .rc_roll = rx_roll,
+          .rc_pitch = rx_pitch,
+
+          // System Health
+          .battery_mv = debug_vbat,
+          .loop_time_us = (uint16_t)debug_exec_time_us,
+          .cpu_temp = 0, // TODO: Add ESP32 temperature reading
+          .pad = 0};
+      blackbox_log(&entry);
+    } else if (!system_armed) {
+      blackbox_counter = 0; // Reset counter when disarmed
+    }
+
+    // Wait for next cycle - precise timing using esp_timer
+    // Busy-wait until next cycle time (FreeRTOS tick is 10ms, too slow for
+    // 250Hz)
+    next_cycle_time += cycle_period_us;
+    while (esp_timer_get_time() < next_cycle_time) {
+      // Tight loop - yields CPU briefly to avoid complete starvation
+      taskYIELD();
+    }
   }
 }
 
@@ -318,22 +415,97 @@ void app_main(void) {
     printf("Calibration saved to NVS.\n");
   }
 
+  // ========== LEVEL CHECK ==========
+  // Take multiple IMU readings and check if quad is level
+  // This helps verify trim values are correct before flying
+  printf("\n");
+  printf("========================================\n");
+  printf("       LEVEL CHECK - Keep quad level!\n");
+  printf("========================================\n");
+  printf("Taking 100 samples...\n");
+
+  float roll_sum = 0.0f;
+  float pitch_sum = 0.0f;
+  const int LEVEL_CHECK_SAMPLES = 100;
+
+  // Wait for IMU to stabilize
+  vTaskDelay(pdMS_TO_TICKS(500));
+
+  // Collect samples
+  for (int i = 0; i < LEVEL_CHECK_SAMPLES; i++) {
+    imu_read(0.004f); // 4ms dt
+    const imu_data_t *imu = imu_get_data();
+    roll_sum += imu->roll_deg;
+    pitch_sum += imu->pitch_deg;
+    vTaskDelay(pdMS_TO_TICKS(10)); // 10ms between samples
+  }
+
+  float avg_roll = roll_sum / LEVEL_CHECK_SAMPLES;
+  float avg_pitch = pitch_sum / LEVEL_CHECK_SAMPLES;
+
+  printf("\n");
+  printf("LEVEL CHECK RESULTS:\n");
+  printf("----------------------------------------\n");
+  printf("  Average Roll:  %+.2f degrees\n", avg_roll);
+  printf("  Average Pitch: %+.2f degrees\n", avg_pitch);
+  printf("----------------------------------------\n");
+
+  // Check if level (within ±1 degree is acceptable)
+  bool roll_ok = fabsf(avg_roll) < 1.0f;
+  bool pitch_ok = fabsf(avg_pitch) < 1.0f;
+
+  if (roll_ok && pitch_ok) {
+    printf("  STATUS: ✓ LEVEL OK!\n");
+    printf("  Quad is level, ready to fly.\n");
+  } else {
+    printf("  STATUS: ✗ NOT LEVEL - Adjust trim!\n");
+    printf("\n");
+    printf("  RECOMMENDED TRIM ADJUSTMENTS:\n");
+
+    if (!pitch_ok) {
+      if (avg_pitch > 0) {
+        printf("  → PITCH_TRIM_DEG: Decrease by %.1f\n", avg_pitch);
+        printf("    (Current pitch reads +%.1f, reduce trim)\n", avg_pitch);
+      } else {
+        printf("  → PITCH_TRIM_DEG: Increase by %.1f\n", -avg_pitch);
+        printf("    (Current pitch reads %.1f, increase trim)\n", avg_pitch);
+      }
+    }
+
+    if (!roll_ok) {
+      if (avg_roll > 0) {
+        printf("  → ROLL_TRIM_DEG: Decrease by %.1f\n", avg_roll);
+        printf("    (Current roll reads +%.1f, reduce trim)\n", avg_roll);
+      } else {
+        printf("  → ROLL_TRIM_DEG: Increase by %.1f\n", -avg_roll);
+        printf("    (Current roll reads %.1f, increase trim)\n", avg_roll);
+      }
+    }
+
+    printf("\n");
+    printf("  Edit lib/imu/imu.c lines 57-58 and rebuild.\n");
+  }
+
+  printf("========================================\n\n");
+  // ========== END LEVEL CHECK ==========
+
   // 5. Init Control Loops
   rate_control_init();
   angle_control_init();
 
-  // 6. Start Control Loop
-  const esp_timer_create_args_t timer_args = {
-      .callback = &control_loop_callback,
-      .name = "control_loop",
-      .dispatch_method = ESP_TIMER_TASK,
-  };
-  esp_timer_handle_t control_timer;
-  ESP_ERROR_CHECK(esp_timer_create(&timer_args, &control_timer));
-  ESP_ERROR_CHECK(
-      esp_timer_start_periodic(control_timer, CONTROL_LOOP_PERIOD_US));
+  // 6. Start Control Loop on Core 1 (dedicated for flight-critical code)
+  // Core 0: WiFi, Webserver, Logger (background I/O)
+  // Core 1: Control Loop, Sensor Fusion, PWM (real-time flight critical)
+  xTaskCreatePinnedToCore(control_loop_task, // Task function
+                          "control_loop",    // Task name
+                          4096,              // Stack size (bytes)
+                          NULL,              // Task parameters
+                          24,   // Priority (high - flight critical)
+                          NULL, // Task handle (not needed)
+                          1     // Core 1 (isolated from WiFi)
+  );
 
-  printf("Control Loop Started.\n");
+  printf("Control Loop Task created on Core 1.\n");
 
   // 8. Main Loop (Monitoring & Arming)
   while (1) {
@@ -347,7 +519,24 @@ void app_main(void) {
       if (!system_armed) {
         // Check throttle safety before arming
         uint16_t rx_thr_check = rx_get_channel(2);
-        if (rx_thr_check < 1150) { // Throttle must be low to arm
+
+        // Check battery voltage before arming
+        // Prevent arming if: battery = 0 (ADC error) OR battery invalid OR
+        // battery critical
+        uint16_t bat_check = adc_read_battery_voltg();
+        bool battery_ok = (bat_check > 9900); // Must be above 9.9V to arm
+
+        if (!battery_ok) {
+          static int bat_warn_counter = 0;
+          if (bat_warn_counter++ % 50 == 0)
+            printf("CANNOT ARM: Battery invalid or critical! (%.2fV)\n",
+                   bat_check / 1000.0f);
+        } else if (rx_thr_check >= 1150) {
+          static int warn_counter = 0;
+          if (warn_counter++ % 50 == 0)
+            printf("CANNOT ARM: Throttle not low!\n");
+        } else {
+          // All checks passed - ARM!
           system_armed = true;
 
           // Reset PIDs to prevent I-term windup from ground handling
@@ -358,10 +547,6 @@ void app_main(void) {
           blackbox_clear(); // Clear old data
           blackbox_start(); // Start recording new flight
           printf("ARMED! (Switch High)\n");
-        } else {
-          static int warn_counter = 0;
-          if (warn_counter++ % 50 == 0)
-            printf("CANNOT ARM: Throttle not low!\n");
         }
       }
     } else {
@@ -407,14 +592,21 @@ void app_main(void) {
       mixer_arm(false);
       printf("EMERGENCY STOP TRIGGERED!\n");
       error_state = true;
+      snprintf(system_status_msg, sizeof(system_status_msg),
+               "EMERGENCY STOP: Button Pressed");
     }
 
     // Critical Battery Check - Disarm if critically low
-    if (system_armed && debug_vbat <= 9900) { // Critical <= 9.9V
+    // Only check if voltage reading is valid (> 5V = wire connected)
+    if (system_armed && debug_vbat > 5000 &&
+        debug_vbat <= 9900) { // Critical <= 9.9V
       system_armed = false;
       mixer_arm(false);
       gpio_set_level(LED_PIN, 1); // LED solid ON for critical battery
       printf("CRITICAL BATTERY! DISARMED.\n");
+      error_state = true; // Ensure error state is set
+      snprintf(system_status_msg, sizeof(system_status_msg),
+               "CRITICAL BATTERY: %.2fV", debug_vbat / 1000.0f);
     }
 
     if (control_loop_flag) {
@@ -423,16 +615,27 @@ void app_main(void) {
       uint16_t rx_ch[RX_CHANNEL_COUNT];
       rx_get_all(rx_ch);
 
-      // Debug print commented out to reduce loop time
-      // printf("A: %5.1f %5.1f | G: %6.1f %6.1f %6.1f | P: %5.1f %5.1f %5.1f |
-      // "
-      //        "M: %4d %4d %4d %4d | RX: %4d %4d %4d %4d %4d %4d "
-      //        "| V: %d | T: %lld us\n",
-      //        debug_angle[0], debug_angle[1], debug_gyro[0], debug_gyro[1],
-      //        debug_gyro[2], debug_pid[0], debug_pid[1], debug_pid[2],
-      //        debug_motors[0], debug_motors[1], debug_motors[2],
-      //        debug_motors[3], rx_ch[0], rx_ch[1], rx_ch[2], rx_ch[3],
-      //        rx_ch[4], rx_ch[5], debug_vbat, debug_exec_time_us);
+      // === FAST DEBUG PRINT - For bench testing ===
+      // Format: Angles | PID Outputs | Motors
+      // R/P = Roll/Pitch angles (deg)
+      // Pr/Pp = PID output for roll/pitch (what goes to mixer)
+      // M1-M4 = Motor PWM values
+      printf("R:%+5.1f P:%+5.1f | Pr:%+6.1f Pp:%+6.1f | M1:%4d M2:%4d M3:%4d "
+             "M4:%4d\n",
+             debug_angle[0], debug_angle[1], // Angles
+             debug_pid[0], debug_pid[1],     // PID outputs
+             debug_motors[0], debug_motors[1], debug_motors[2],
+             debug_motors[3]);
+
+      // === OLD 5Hz DEBUG PRINT (Commented for testing) ===
+      // static uint32_t last_debug_print = 0;
+      // uint32_t now = esp_timer_get_time() / 1000;
+      // if (now - last_debug_print > 200) { // 5Hz
+      //   printf("GZ:%6.2f | M1:%4d M2:%4d M3:%4d M4:%4d\n",
+      //          imu_get_data()->gyro_z_dps, debug_motors[0],
+      //          debug_motors[1], debug_motors[2], debug_motors[3]);
+      //   last_debug_print = now;
+      // }
 
       // if (error_state) {
       //   printf("!!! SYSTEM ERROR / DISARMED !!!\n");

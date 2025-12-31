@@ -9,29 +9,32 @@ system_config_t sys_cfg;
 
 void config_load_defaults(void) {
   // Roll Rate PID
-  // Tuned for F450 + 1400KV + 8045 props (Dec 2024 - 3.5hr tuning session)
-  // Conservative values for stable liftoff - increase gradually
-  sys_cfg.roll_kp = 0.08f; // Low P to prevent oscillation
-  sys_cfg.roll_ki = 0.01f; // Minimal I for rate loop
-  sys_cfg.roll_kd = 0.08f; // Reduced D to dampen oscillations
+  // OPTIMIZED for F450 + 1400KV + 8045 props (880g) - HIGH MECHANICAL GAIN
+  // Lower P/I for high-gain, higher D for vibration damping
+  sys_cfg.roll_kp = 0.035f; // Reduced for high mechanical gain
+  sys_cfg.roll_ki = 0.015f; // Lower to prevent slow oscillation
+  sys_cfg.roll_kd = 0.004f; // INCREASED for vibration damping
 
   // Pitch Rate PID (same as roll for symmetric response)
-  sys_cfg.pitch_kp = 0.08f;
-  sys_cfg.pitch_ki = 0.01f;
-  sys_cfg.pitch_kd = 0.08f;
+  sys_cfg.pitch_kp = 0.035f; // Reduced for high mechanical gain
+  sys_cfg.pitch_ki = 0.015f; // Lower to prevent slow oscillation
+  sys_cfg.pitch_kd = 0.004f; // INCREASED for vibration damping
 
   // Yaw Rate PID
-  sys_cfg.yaw_kp = 2.0f; // Reduced from 3.0 for smoother yaw
+  sys_cfg.yaw_kp = 3.5f; // Reduced from 4.5 to prevent saturation
   sys_cfg.yaw_ki = 0.02f;
-  sys_cfg.yaw_kd = 0.15f;
+  sys_cfg.yaw_kd = 0.30f; // Increased for better damping
 
   // Angle PID (outer loop - provides rate setpoint to inner loop)
-  sys_cfg.angle_roll_kp = 1.0f;  // Reduced for gentler self-leveling
-  sys_cfg.angle_roll_ki = 0.25f; // Helps correct steady-state drift
+  // High Angle P for <2s self-leveling
+  sys_cfg.angle_roll_kp = 3.5f; // Aggressive for fast leveling
+  sys_cfg.angle_roll_ki =
+      0.3f; // REDUCED from 0.8 - was causing slow oscillation
   sys_cfg.angle_roll_kd = 0.0f;
 
-  sys_cfg.angle_pitch_kp = 1.0f;
-  sys_cfg.angle_pitch_ki = 0.25f;
+  sys_cfg.angle_pitch_kp = 3.5f;
+  sys_cfg.angle_pitch_ki =
+      0.3f; // REDUCED from 0.8 - was causing slow oscillation
   sys_cfg.angle_pitch_kd = 0.0f;
 
   // Limits (reduced for high-gain motors)
@@ -39,7 +42,7 @@ void config_load_defaults(void) {
   sys_cfg.rate_integral_limit = 100.0f;
 
   // Safety (conservative for tuning - change to 60 when stable)
-  sys_cfg.crash_angle_deg = 45.0f;
+  sys_cfg.crash_angle_deg = 60.0f;   // Increased from 45 for tuning
   sys_cfg.low_bat_threshold = 10500; // 10.5V
 }
 

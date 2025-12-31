@@ -1,5 +1,6 @@
 #include "webserver.h"
 #include "../adc/adc.h"
+#include "../angle_control/angle_control.h"
 #include "../blackbox/blackbox.h"
 #include "../config/config.h"
 #include "../imu/imu.h"
@@ -17,32 +18,66 @@
 
 // External system state from main.c
 extern bool system_armed;
+extern char system_status_msg[64];
 
 #define WIFI_SSID "QuadPID"
 #define WIFI_PASS "12345678"
 
 static httpd_handle_t server = NULL;
 
-// Minimal HTML - no CSS, just functional
+// Minimal HTML with live angle display - auto-refreshing
 static const char *HTML_PAGE =
-    "<html><head><title>PID</title></head><body>"
+    "<html><head><title>PID</title>"
+    "<meta name='viewport' content='width=device-width, initial-scale=1.0'>"
+    "<style>"
+    ".live{background:#f0f0f0;padding:10px;margin:10px "
+    "0;font-family:monospace;}"
+    ".live td{padding:2px 8px;}"
+    ".tgt{color:blue;} .act{color:green;} .rate{color:orange;}"
+    "</style>"
+    "<script>"
+    "function upd(){"
+    "fetch('/live').then(r=>r.json()).then(d=>{"
+    "document.getElementById('tr').innerText=d.tr.toFixed(1);"
+    "document.getElementById('tp').innerText=d.tp.toFixed(1);"
+    "document.getElementById('ar').innerText=d.ar.toFixed(1);"
+    "document.getElementById('ap').innerText=d.ap.toFixed(1);"
+    "document.getElementById('rr').innerText=d.rr.toFixed(1);"
+    "document.getElementById('rp').innerText=d.rp.toFixed(1);"
+    "document.getElementById('armed').innerText=d.armed?'ARMED':'DISARMED';"
+    "document.getElementById('armed').style.color=d.armed?'red':'gray';"
+    "}).catch(e=>{});setTimeout(upd,200);}"
+    "window.onload=upd;"
+    "</script>"
+    "</head><body>"
     "<h2>QuadPID - Bat: %d mV</h2>"
+    "<h3>Status: <span id='armed' style='color:gray'>--</span> | %s</h3>"
+    "<div class='live'>"
+    "<b>Live Angles (deg)</b><br>"
+    "<table>"
+    "<tr><th></th><th class='tgt'>Target</th><th class='act'>Actual</th><th "
+    "class='rate'>Rate SP</th></tr>"
+    "<tr><td>Roll:</td><td class='tgt' id='tr'>--</td><td class='act' "
+    "id='ar'>--</td><td class='rate' id='rr'>--</td></tr>"
+    "<tr><td>Pitch:</td><td class='tgt' id='tp'>--</td><td class='act' "
+    "id='ap'>--</td><td class='rate' id='rp'>--</td></tr>"
+    "</table></div>"
     "<form method=POST action=/s>"
-    "<b>Rate Roll</b> P:<input name=rp value=%.2f size=4> "
-    "I:<input name=ri value=%.2f size=4> "
-    "D:<input name=rd value=%.2f size=4><br>"
-    "<b>Rate Pitch</b> P:<input name=pp value=%.2f size=4> "
-    "I:<input name=pi value=%.2f size=4> "
-    "D:<input name=pd value=%.2f size=4><br>"
-    "<b>Rate Yaw</b> P:<input name=yp value=%.2f size=4> "
-    "I:<input name=yi value=%.2f size=4> "
-    "D:<input name=yd value=%.2f size=4><br>"
-    "<b>Angle</b> Roll P:<input name=arp value=%.2f size=4> "
-    "I:<input name=ari value=%.2f size=4> "
-    "D:<input name=ard value=%.2f size=4><br>"
-    "Pitch P:<input name=app value=%.2f size=4> "
-    "I:<input name=api value=%.2f size=4> "
-    "D:<input name=apd value=%.2f size=4><br><br>"
+    "<b>Rate Roll</b> P:<input name=rp value=%.3f size=6> "
+    "I:<input name=ri value=%.3f size=6> "
+    "D:<input name=rd value=%.3f size=6><br>"
+    "<b>Rate Pitch</b> P:<input name=pp value=%.3f size=6> "
+    "I:<input name=pi value=%.3f size=6> "
+    "D:<input name=pd value=%.3f size=6><br>"
+    "<b>Rate Yaw</b> P:<input name=yp value=%.3f size=6> "
+    "I:<input name=yi value=%.3f size=6> "
+    "D:<input name=yd value=%.3f size=6><br>"
+    "<b>Angle</b> Roll P:<input name=arp value=%.3f size=6> "
+    "I:<input name=ari value=%.3f size=6> "
+    "D:<input name=ard value=%.3f size=6><br>"
+    "Pitch P:<input name=app value=%.3f size=6> "
+    "I:<input name=api value=%.3f size=6> "
+    "D:<input name=apd value=%.3f size=6><br><br>"
     "<input type=submit value=SAVE></form>"
     "<form method=POST action=/r><input type=submit value=RESET></form>"
     "<hr><a href=/blackbox>Download Blackbox CSV</a> | "
@@ -64,7 +99,7 @@ static float parse_float(const char *buf, const char *key, float def) {
 }
 
 static esp_err_t get_handler(httpd_req_t *req) {
-  char *html = malloc(2048);
+  char *html = malloc(4096); // Increased for live display JavaScript
   if (!html)
     return ESP_FAIL;
 
@@ -82,12 +117,12 @@ static esp_err_t get_handler(httpd_req_t *req) {
       err_msg = "ERROR: Disarm first before changing settings!";
   }
 
-  snprintf(html, 2048, HTML_PAGE, adc_read_battery_voltg(), sys_cfg.roll_kp,
-           sys_cfg.roll_ki, sys_cfg.roll_kd, sys_cfg.pitch_kp, sys_cfg.pitch_ki,
-           sys_cfg.pitch_kd, sys_cfg.yaw_kp, sys_cfg.yaw_ki, sys_cfg.yaw_kd,
-           sys_cfg.angle_roll_kp, sys_cfg.angle_roll_ki, sys_cfg.angle_roll_kd,
-           sys_cfg.angle_pitch_kp, sys_cfg.angle_pitch_ki,
-           sys_cfg.angle_pitch_kd, msg, err_msg);
+  snprintf(html, 4096, HTML_PAGE, adc_read_battery_voltg(), system_status_msg,
+           sys_cfg.roll_kp, sys_cfg.roll_ki, sys_cfg.roll_kd, sys_cfg.pitch_kp,
+           sys_cfg.pitch_ki, sys_cfg.pitch_kd, sys_cfg.yaw_kp, sys_cfg.yaw_ki,
+           sys_cfg.yaw_kd, sys_cfg.angle_roll_kp, sys_cfg.angle_roll_ki,
+           sys_cfg.angle_roll_kd, sys_cfg.angle_pitch_kp,
+           sys_cfg.angle_pitch_ki, sys_cfg.angle_pitch_kd, msg, err_msg);
 
   httpd_resp_send(req, html, strlen(html));
   free(html);
@@ -152,31 +187,61 @@ static esp_err_t reset_handler(httpd_req_t *req) {
   return ESP_OK;
 }
 
-// Blackbox CSV download handler
+// Blackbox CSV download handler - EXPANDED with all new fields
 static esp_err_t blackbox_handler(httpd_req_t *req) {
   httpd_resp_set_type(req, "text/csv");
   httpd_resp_set_hdr(req, "Content-Disposition",
                      "attachment; filename=blackbox.csv");
 
-  // Send CSV header
-  const char *header = "time_ms,gyro_x,gyro_y,gyro_z,roll,pitch,pid_roll,pid_"
-                       "pitch,pid_yaw,m1,m2,m3,m4,throttle,flags\n";
+  // Send CSV header - EXPANDED for deep analysis
+  const char *header = "time_ms,flags,"
+                       "gyro_x,gyro_y,gyro_z,"           // Gyro rates
+                       "accel_x,accel_y,accel_z,"        // Raw accelerometer
+                       "roll,pitch,"                     // Fused angles
+                       "angle_sp_roll,angle_sp_pitch,"   // Angle setpoints
+                       "angle_err_roll,angle_err_pitch," // Angle errors
+                       "angle_i_roll,angle_i_pitch,"     // Angle I-terms
+                       "rate_sp_roll,rate_sp_pitch,"     // Rate setpoints
+                       "rate_err_roll,rate_err_pitch,"   // Rate errors
+                       "rate_i_roll,rate_i_pitch,rate_i_yaw," // Rate I-terms
+                       "pid_roll,pid_pitch,pid_yaw,"          // PID outputs
+                       "m1,m2,m3,m4,"                         // Motors
+                       "rc_thr,rc_roll,rc_pitch,"             // RC inputs
+                       "battery_mv,loop_us\n";                // System health
   httpd_resp_sendstr_chunk(req, header);
 
   // Send each entry
   uint16_t count = blackbox_get_count();
-  char line[256];
+  char line[512]; // Larger buffer for expanded data
 
   for (uint16_t i = 0; i < count; i++) {
     const blackbox_entry_t *e = blackbox_get_entry(i);
     if (e) {
-      snprintf(
-          line, sizeof(line),
-          "%lu,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%u,%u,%u,%u,%u,%u\n",
-          (unsigned long)e->timestamp_ms, e->gyro_x, e->gyro_y, e->gyro_z,
-          e->angle_roll, e->angle_pitch, e->pid_roll, e->pid_pitch, e->pid_yaw,
-          e->motor[0], e->motor[1], e->motor[2], e->motor[3], e->throttle,
-          e->flags);
+      snprintf(line, sizeof(line),
+               "%lu,%u,"         // time, flags
+               "%.2f,%.2f,%.2f," // gyro x/y/z
+               "%.3f,%.3f,%.3f," // accel x/y/z
+               "%.2f,%.2f,"      // roll, pitch
+               "%.2f,%.2f,"      // angle setpoints
+               "%.2f,%.2f,"      // angle errors
+               "%.2f,%.2f,"      // angle I-terms
+               "%.2f,%.2f,"      // rate setpoints
+               "%.2f,%.2f,"      // rate errors
+               "%.2f,%.2f,%.2f," // rate I-terms
+               "%.2f,%.2f,%.2f," // PID outputs
+               "%u,%u,%u,%u,"    // motors
+               "%u,%u,%u,"       // RC inputs
+               "%u,%u\n",        // battery, loop time
+               (unsigned long)e->timestamp_ms, e->flags, e->gyro_x, e->gyro_y,
+               e->gyro_z, e->accel_x, e->accel_y, e->accel_z, e->angle_roll,
+               e->angle_pitch, e->angle_setpoint_roll, e->angle_setpoint_pitch,
+               e->angle_error_roll, e->angle_error_pitch, e->angle_i_term_roll,
+               e->angle_i_term_pitch, e->rate_setpoint_roll,
+               e->rate_setpoint_pitch, e->rate_error_roll, e->rate_error_pitch,
+               e->rate_i_term_roll, e->rate_i_term_pitch, e->rate_i_term_yaw,
+               e->pid_roll, e->pid_pitch, e->pid_yaw, e->motor[0], e->motor[1],
+               e->motor[2], e->motor[3], e->rc_throttle, e->rc_roll,
+               e->rc_pitch, e->battery_mv, e->loop_time_us);
       httpd_resp_sendstr_chunk(req, line);
     }
   }
@@ -221,11 +286,50 @@ static esp_err_t calibrate_handler(httpd_req_t *req) {
   return ESP_OK;
 }
 
+// Live data JSON endpoint - returns target/actual angles for real-time display
+// External variables to store target angles (set by main.c control loop)
+static float live_target_roll = 0.0f;
+static float live_target_pitch = 0.0f;
+
+void webserver_set_targets(float roll, float pitch) {
+  live_target_roll = roll;
+  live_target_pitch = pitch;
+}
+
+static esp_err_t live_handler(httpd_req_t *req) {
+  const imu_data_t *imu = imu_get_data();
+  const angle_output_t *angle_out = angle_control_get_output();
+
+  // Safety: return default values if data not yet available
+  float roll_deg = 0.0f, pitch_deg = 0.0f;
+  float roll_rate_sp = 0.0f, pitch_rate_sp = 0.0f;
+
+  if (imu != NULL) {
+    roll_deg = imu->roll_deg;
+    pitch_deg = imu->pitch_deg;
+  }
+  if (angle_out != NULL) {
+    roll_rate_sp = angle_out->roll_rate_setpoint;
+    pitch_rate_sp = angle_out->pitch_rate_setpoint;
+  }
+
+  char json[256];
+  snprintf(json, sizeof(json),
+           "{\"tr\":%.2f,\"tp\":%.2f,\"ar\":%.2f,\"ap\":%.2f,"
+           "\"rr\":%.2f,\"rp\":%.2f,\"armed\":%s}",
+           live_target_roll, live_target_pitch, roll_deg, pitch_deg,
+           roll_rate_sp, pitch_rate_sp, system_armed ? "true" : "false");
+
+  httpd_resp_set_type(req, "application/json");
+  httpd_resp_send(req, json, strlen(json));
+  return ESP_OK;
+}
+
 static void start_server(void) {
   httpd_config_t cfg = HTTPD_DEFAULT_CONFIG();
   cfg.core_id = 0;
-  cfg.stack_size = 8192; // Increased for blackbox CSV
-  cfg.max_uri_handlers = 8;
+  cfg.stack_size = 8192;     // Increased for blackbox CSV
+  cfg.max_uri_handlers = 10; // Increased for live endpoint
 
   if (httpd_start(&server, &cfg) == ESP_OK) {
     httpd_uri_t get = {.uri = "/", .method = HTTP_GET, .handler = get_handler};
@@ -238,12 +342,15 @@ static void start_server(void) {
     httpd_uri_t blackbox_clr = {.uri = "/blackbox/clear",
                                 .method = HTTP_POST,
                                 .handler = blackbox_clear_handler};
+    httpd_uri_t live = {
+        .uri = "/live", .method = HTTP_GET, .handler = live_handler};
 
     httpd_register_uri_handler(server, &get);
     httpd_register_uri_handler(server, &save);
     httpd_register_uri_handler(server, &reset);
     httpd_register_uri_handler(server, &blackbox);
     httpd_register_uri_handler(server, &blackbox_clr);
+    httpd_register_uri_handler(server, &live);
 
     httpd_uri_t recal = {
         .uri = "/calibrate", .method = HTTP_POST, .handler = calibrate_handler};

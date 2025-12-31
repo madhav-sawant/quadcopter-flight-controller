@@ -1,11 +1,12 @@
 #include "mixer.h"
 #include "../pwm/pwm.h"
-#include "../rate_control/rate_control.h"
 
 static bool mixer_armed = false;
 static bool mixer_is_throttle_idle =
     false; // Track idle state for I-term freeze
 static uint16_t motor_cmds[4] = {1000, 1000, 1000, 1000};
+
+// Motor filtering REMOVED - direct output for fastest response (~0ms delay)
 
 static uint16_t clamp_motor(int32_t val) {
   // When armed, motors should never go below IDLE or above MAX
@@ -36,9 +37,9 @@ void mixer_update(uint16_t throttle_us, float roll_pid, float pitch_pid,
 
   // If throttle is below idle threshold, just spin at idle without PID mixing
   // This prevents motor fluctuations when on the ground
+  // NOTE: Integral freeze is handled by main.c - no duplicate call here
   if (t < MIXER_IDLE_THROTTLE + 50) { // Below 1150 = no PID mixing
     mixer_is_throttle_idle = true;
-    rate_control_freeze_integral(true); // Freeze I-term to prevent windup
     for (int i = 0; i < 4; i++) {
       motor_cmds[i] = MIXER_IDLE_THROTTLE;
       pwm_set_motor(i, MIXER_IDLE_THROTTLE);
@@ -46,11 +47,8 @@ void mixer_update(uint16_t throttle_us, float roll_pid, float pitch_pid,
     return;
   }
 
-  // Throttle is above idle - unfreeze I-term
-  if (mixer_is_throttle_idle) {
-    mixer_is_throttle_idle = false;
-    rate_control_freeze_integral(false);
-  }
+  // Throttle is above idle - main.c handles I-term freeze state
+  mixer_is_throttle_idle = false;
 
   if (t > MIXER_MAX_THROTTLE)
     t = MIXER_MAX_THROTTLE;
@@ -61,20 +59,27 @@ void mixer_update(uint16_t throttle_us, float roll_pid, float pitch_pid,
   //
   // Roll (+) = Right wing down  -> M3,M4 speed up, M1,M2 slow down
   // Pitch (+) = Nose up         -> M1,M3 speed up, M2,M4 slow down
-  // Yaw (+) = Clockwise         -> M2,M3 speed up (CW motors), M1,M4 slow down
+  // Yaw (+) = Counter-Clockwise -> M2,M3 speed up (CW motors), M1,M4 slow down
   // (CCW motors)
   //
-  // NOTE: Pitch AND Yaw signs inverted to match IMU orientation
+  // NOTE: Pitch AND Yaw signs inverted to match IMU orientation - REVERTED to
+  // original
 
-  int32_t m1 = t - (int32_t)roll_pid + (int32_t)pitch_pid -
+  // PITCH SIGN FIX: Inverted from original.
+  // When pitch_pid < 0 (nose too high, want nose down), rear motors must
+  // INCREASE. Original: m1 = t + pitch_pid (added negative = decreased rear).
+  // WRONG. Fixed:    m1 = t - pitch_pid (subtract negative = increase rear).
+  // CORRECT.
+  int32_t m1 = t - (int32_t)roll_pid - (int32_t)pitch_pid -
                (int32_t)yaw_pid; // Rear Right CCW
-  int32_t m2 = t - (int32_t)roll_pid - (int32_t)pitch_pid +
+  int32_t m2 = t - (int32_t)roll_pid + (int32_t)pitch_pid +
                (int32_t)yaw_pid; // Front Right CW
-  int32_t m3 = t + (int32_t)roll_pid + (int32_t)pitch_pid +
+  int32_t m3 = t + (int32_t)roll_pid - (int32_t)pitch_pid +
                (int32_t)yaw_pid; // Rear Left CW
-  int32_t m4 = t + (int32_t)roll_pid - (int32_t)pitch_pid -
+  int32_t m4 = t + (int32_t)roll_pid + (int32_t)pitch_pid -
                (int32_t)yaw_pid; // Front Left CCW
 
+  // Clamp and output motor values directly (NO filtering for fastest response)
   motor_cmds[0] = clamp_motor(m1);
   motor_cmds[1] = clamp_motor(m2);
   motor_cmds[2] = clamp_motor(m3);
