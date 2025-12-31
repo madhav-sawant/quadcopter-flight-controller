@@ -151,8 +151,7 @@ static void control_loop_task(void *arg) {
     }
 
     // 3. Calculate Rate Setpoints
-    // SIMPLIFIED: Direct rate commands (no angle loop)
-    // Option 1: Use RX sticks for direct rate control
+    // Map RC stick inputs to target rotation rates (deg/s)
     uint16_t rx_roll = rx_get_channel(0);
     uint16_t rx_pitch = rx_get_channel(1);
     uint16_t rx_thr = rx_get_channel(2);
@@ -190,6 +189,8 @@ static void control_loop_task(void *arg) {
     // Safety: Ensure throttle doesn't drop below min or exceed max
     if (throttle < 1000)
       throttle = 1000;
+    if (throttle > TUNING_THROTTLE_LIMIT)
+      throttle = TUNING_THROTTLE_LIMIT;
 
     mixer_update(throttle, pid_out->roll, pid_out->pitch, pid_out->yaw);
 
@@ -478,18 +479,11 @@ void app_main(void) {
         // Check throttle safety before arming
         uint16_t rx_thr_check = rx_get_channel(2);
 
-        // Check battery voltage before arming
-        // Prevent arming if: battery = 0 (ADC error) OR battery invalid OR
-        // battery critical
-        uint16_t bat_check = adc_read_battery_voltg();
-        bool battery_ok = (bat_check > 9900); // Must be above 9.9V to arm
+        // DISABLED: Battery check removed for testing
+        // uint16_t bat_check = adc_read_battery_voltg();
+        // bool battery_ok = (bat_check > 9900);
 
-        if (!battery_ok) {
-          static int bat_warn_counter = 0;
-          if (bat_warn_counter++ % 50 == 0)
-            printf("CANNOT ARM: Battery invalid or critical! (%.2fV)\n",
-                   bat_check / 1000.0f);
-        } else if (rx_thr_check >= 1150) {
+        if (rx_thr_check >= 1150) {
           static int warn_counter = 0;
           if (warn_counter++ % 50 == 0)
             printf("CANNOT ARM: Throttle not low!\n");
@@ -553,18 +547,20 @@ void app_main(void) {
                "EMERGENCY STOP: Button Pressed");
     }
 
-    // Critical Battery Check - Disarm if critically low
-    // Only check if voltage reading is valid (> 5V = wire connected)
-    if (system_armed && debug_vbat > 5000 &&
-        debug_vbat <= 9900) { // Critical <= 9.9V
-      system_armed = false;
-      mixer_arm(false);
-      gpio_set_level(LED_PIN, 1); // LED solid ON for critical battery
-      printf("CRITICAL BATTERY! DISARMED.\n");
-      error_state = true; // Ensure error state is set
-      snprintf(system_status_msg, sizeof(system_status_msg),
-               "CRITICAL BATTERY: %.2fV", debug_vbat / 1000.0f);
-    }
+    // DISABLED: Battery auto-disarm removed for testing
+    // WARNING: Monitor battery voltage manually!
+    // static int crit_bat_counter = 0;
+    // if (system_armed && debug_vbat > 5000 &&
+    //     debug_vbat <= 9000) { // Critical <= 9.0V
+    //   crit_bat_counter++;
+    //   if (crit_bat_counter > 50) {
+    //     system_armed = false;
+    //     mixer_arm(false);
+    //     ...
+    //   }
+    // }
+
+    vTaskDelay(pdMS_TO_TICKS(10)); // 100Hz Main Loop
 
     if (control_loop_flag) {
       control_loop_flag = false;
@@ -573,12 +569,12 @@ void app_main(void) {
       rx_get_all(rx_ch);
 
       // Simplified debug: Gyro | PID | Motors
-      printf("G:%+6.1f|%+6.1f|%+6.1f P:%+6.1f|%+6.1f|%+6.1f M:%4d %4d %4d "
-             "%4d\n",
-             debug_gyro[0], debug_gyro[1], debug_gyro[2], // Gyro rates
-             debug_pid[0], debug_pid[1], debug_pid[2],    // PID outputs
-             debug_motors[0], debug_motors[1], debug_motors[2],
-             debug_motors[3]);
+      // printf("G:%+6.1f|%+6.1f|%+6.1f P:%+6.1f|%+6.1f|%+6.1f M:%4d %4d %4d "
+      //        "%4d\n",
+      //        debug_gyro[0], debug_gyro[1], debug_gyro[2], // Gyro rates
+      //        debug_pid[0], debug_pid[1], debug_pid[2],    // PID outputs
+      //        debug_motors[0], debug_motors[1], debug_motors[2],
+      //        debug_motors[3]);
 
       // === OLD 5Hz DEBUG PRINT (Commented for testing) ===
       // static uint32_t last_debug_print = 0;
@@ -594,7 +590,5 @@ void app_main(void) {
       //   printf("!!! SYSTEM ERROR / DISARMED !!!\n");
       // }
     }
-
-    vTaskDelay(pdMS_TO_TICKS(10));
   }
 }

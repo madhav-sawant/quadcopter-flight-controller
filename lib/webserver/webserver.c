@@ -202,9 +202,6 @@ static esp_err_t blackbox_handler(httpd_req_t *req) {
                "%.2f,%.2f,%.2f," // gyro x/y/z
                "%.3f,%.3f,%.3f," // accel x/y/z
                "%.2f,%.2f,"      // roll, pitch
-               "%.2f,%.2f,"      // angle setpoints
-               "%.2f,%.2f,"      // angle errors
-               "%.2f,%.2f,"      // angle I-terms
                "%.2f,%.2f,"      // rate setpoints
                "%.2f,%.2f,"      // rate errors
                "%.2f,%.2f,%.2f," // rate I-terms
@@ -214,14 +211,12 @@ static esp_err_t blackbox_handler(httpd_req_t *req) {
                "%u,%u\n",        // battery, loop time
                (unsigned long)e->timestamp_ms, e->flags, e->gyro_x, e->gyro_y,
                e->gyro_z, e->accel_x, e->accel_y, e->accel_z, e->angle_roll,
-               e->angle_pitch, e->angle_setpoint_roll, e->angle_setpoint_pitch,
-               e->angle_error_roll, e->angle_error_pitch, e->angle_i_term_roll,
-               e->angle_i_term_pitch, e->rate_setpoint_roll,
-               e->rate_setpoint_pitch, e->rate_error_roll, e->rate_error_pitch,
-               e->rate_i_term_roll, e->rate_i_term_pitch, e->rate_i_term_yaw,
-               e->pid_roll, e->pid_pitch, e->pid_yaw, e->motor[0], e->motor[1],
-               e->motor[2], e->motor[3], e->rc_throttle, e->rc_roll,
-               e->rc_pitch, e->battery_mv, e->loop_time_us);
+               e->angle_pitch, e->rate_setpoint_roll, e->rate_setpoint_pitch,
+               e->rate_error_roll, e->rate_error_pitch, e->rate_i_term_roll,
+               e->rate_i_term_pitch, e->rate_i_term_yaw, e->pid_roll,
+               e->pid_pitch, e->pid_yaw, e->motor[0], e->motor[1], e->motor[2],
+               e->motor[3], e->rc_throttle, e->rc_roll, e->rc_pitch,
+               e->battery_mv, e->loop_time_us);
       httpd_resp_sendstr_chunk(req, line);
     }
   }
@@ -276,7 +271,6 @@ void webserver_set_rate_targets(float roll_rate, float pitch_rate) {
 }
 
 static esp_err_t live_handler(httpd_req_t *req) {
-  const rate_output_t *rate_out = rate_control_get_output();
 
   // Actual rates are what the PID computed (or we could use GYRO data?)
   // Let's use the PID's MEASURED rate (which is gyro)

@@ -62,22 +62,18 @@ void mixer_update(uint16_t throttle_us, float roll_pid, float pitch_pid,
   // Yaw (+) = Counter-Clockwise -> M2,M3 speed up (CW motors), M1,M4 slow down
   // (CCW motors)
   //
-  // NOTE: Pitch AND Yaw signs inverted to match IMU orientation - REVERTED to
-  // original
 
-  // PITCH SIGN FIX: Inverted from original.
-  // When pitch_pid < 0 (nose too high, want nose down), rear motors must
-  // INCREASE. Original: m1 = t + pitch_pid (added negative = decreased rear).
-  // WRONG. Fixed:    m1 = t - pitch_pid (subtract negative = increase rear).
-  // CORRECT.
-  int32_t m1 = t - (int32_t)roll_pid - (int32_t)pitch_pid -
-               (int32_t)yaw_pid; // Rear Right CCW
-  int32_t m2 = t - (int32_t)roll_pid + (int32_t)pitch_pid +
-               (int32_t)yaw_pid; // Front Right CW
-  int32_t m3 = t + (int32_t)roll_pid - (int32_t)pitch_pid +
-               (int32_t)yaw_pid; // Rear Left CW
-  int32_t m4 = t + (int32_t)roll_pid + (int32_t)pitch_pid -
-               (int32_t)yaw_pid; // Front Left CCW
+  // HARDWARE ADAPTATION:
+  // Pitch sign is INVERTED relative to standard Quad-X to match specific
+  // motor/ESC wiring.
+  int32_t m1 = t - (int32_t)roll_pid + (int32_t)pitch_pid -
+               (int32_t)yaw_pid; // Rear Right
+  int32_t m2 = t - (int32_t)roll_pid - (int32_t)pitch_pid +
+               (int32_t)yaw_pid; // Front Right
+  int32_t m3 = t + (int32_t)roll_pid + (int32_t)pitch_pid +
+               (int32_t)yaw_pid; // Rear Left
+  int32_t m4 = t + (int32_t)roll_pid - (int32_t)pitch_pid -
+               (int32_t)yaw_pid; // Front Left
 
   // Clamp and output motor values directly (NO filtering for fastest response)
   motor_cmds[0] = clamp_motor(m1);

@@ -4,7 +4,7 @@
 // D-term low-pass filter coefficient
 // At 250Hz loop, alpha=0.15 gives ~30Hz cutoff - stronger filtering for high-KV
 // vibration
-#define D_TERM_LPF_ALPHA 0.15f
+#define D_TERM_LPF_ALPHA 0.42f
 
 void pid_init(pid_controller_t *pid, float kp, float ki, float kd,
               float output_limit, float integral_limit) {

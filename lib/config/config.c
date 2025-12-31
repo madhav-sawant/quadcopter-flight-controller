@@ -9,25 +9,27 @@ system_config_t sys_cfg;
 
 void config_load_defaults(void) {
   // Roll Rate PID
-  // OPTIMIZED for F450 + 1400KV + 8045 props (880g) - HIGH MECHANICAL GAIN
-  // Lower P/I for high-gain, higher D for vibration damping
-  sys_cfg.roll_kp = 0.035f; // Reduced for high mechanical gain
-  sys_cfg.roll_ki = 0.015f; // Lower to prevent slow oscillation
-  sys_cfg.roll_kd = 0.004f; // INCREASED for vibration damping
+  // SAFE START for F450 + 1400KV + 8045 props (High Mechanical Gain)
+  // User requested ultra-conservative start: P=0.4, I=0.2
+  sys_cfg.roll_kp = 0.40f;
+  sys_cfg.roll_ki = 0.20f;
+  sys_cfg.roll_kd = 0.03f; // Dampen stops (watch motor temp!)
 
-  // Pitch Rate PID (same as roll for symmetric response)
-  sys_cfg.pitch_kp = 0.035f; // Reduced for high mechanical gain
-  sys_cfg.pitch_ki = 0.015f; // Lower to prevent slow oscillation
-  sys_cfg.pitch_kd = 0.004f; // INCREASED for vibration damping
+  // Pitch Rate PID (symmetric)
+  sys_cfg.pitch_kp = 0.40f;
+  sys_cfg.pitch_ki = 0.20f;
+  sys_cfg.pitch_kd = 0.03f;
 
-  // Yaw Rate PID
-  sys_cfg.yaw_kp = 3.5f; // Reduced from 4.5 to prevent saturation
-  sys_cfg.yaw_ki = 0.02f;
-  sys_cfg.yaw_kd = 0.30f; // Increased for better damping
+  // Yaw Rate PID (Yaw is mechanically weaker)
+  sys_cfg.yaw_kp = 2.50f;
+  sys_cfg.yaw_ki = 2.50f;
+  sys_cfg.yaw_kd = 0.00f; // Yaw usually doesn't need D
 
-  // Limits (reduced for high-gain motors)
-  sys_cfg.rate_output_limit = 350.0f;
-  sys_cfg.rate_integral_limit = 100.0f;
+  // Limits
+  sys_cfg.rate_output_limit =
+      110.0f; // Safer limit for 1400KV motors (Range 1100-1400)
+  sys_cfg.rate_integral_limit =
+      50.0f; // Limit I-term authority to 50 (Output limit is 110)
 
   // Safety
   sys_cfg.low_bat_threshold = 10500; // 10.5V

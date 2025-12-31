@@ -22,6 +22,11 @@ typedef struct {
   float rate_output_limit;
   float rate_integral_limit;
 
+  // Angle Mode PID (Outer Loop)
+  float angle_kp;  // Angle P gain (deg error -> deg/s rate)
+  float angle_ki;  // Angle I gain (optional, usually 0)
+  float angle_max; // Max allowed angle in degrees (e.g., 45)
+
   // Safety
   uint16_t low_bat_threshold;
 } system_config_t;

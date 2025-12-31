@@ -39,7 +39,8 @@
 // UPDATED 2024-12-30: Strengthened filtering to reject F450 motor vibration
 // Alpha = 0.1 means only 10% of new noisy sample is used, 90% is old smoothed
 // value.
-#define GYRO_LPF_ALPHA 0.70f  // Moderate filtering for Gyro (was 0.95)
+#define GYRO_LPF_ALPHA                                                         \
+  0.40f // Stronger filtering for high-gain/vibration setup (was 0.70)
 #define ACCEL_LPF_ALPHA 0.10f // Strong filtering for Accel (was 0.90)
 
 static imu_data_t imu_state;
