@@ -45,7 +45,6 @@
 #include "../lib/rx/rx.h"
 #include "../lib/webserver/webserver.h"
 #include "adc.h"
-#include "angle_control.h"
 #include "imu.h"
 #include "mixer.h"
 #include "rate_control.h"
@@ -90,9 +89,6 @@ char system_status_msg[64] = "System Ready"; // Global status message
 
 // Debug data
 static float debug_gyro[3];
-static float debug_angle[2];      // Roll, Pitch
-static float debug_setpoint[2];   // Target Roll, Pitch
-static int debug_integral_active; // 1=Active, 0=Frozen
 static float debug_pid[3];
 static uint16_t debug_motors[4];
 static uint16_t debug_vbat = 0;
@@ -129,15 +125,16 @@ static void control_loop_task(void *arg) {
     imu_read(1.0f / CONTROL_LOOP_FREQ_HZ);
     const imu_data_t *imu = imu_get_data();
 
-    // 2. Safety Checks (Crash detection)
+    // 2. Safety Checks - Crash Detection
     // Angle-based: if roll or pitch angle is too high, disarm
-    if (fabs(imu->roll_deg) > sys_cfg.crash_angle_deg ||
-        fabs(imu->pitch_deg) > sys_cfg.crash_angle_deg) {
+    const float CRASH_ANGLE_DEG = 60.0f;
+    if (fabs(imu->roll_deg) > CRASH_ANGLE_DEG ||
+        fabs(imu->pitch_deg) > CRASH_ANGLE_DEG) {
       mixer_arm(false);
       system_armed = false;
       error_state = true;
       snprintf(system_status_msg, sizeof(system_status_msg),
-               "CRASH DETECTED: Angle > %.0f deg", sys_cfg.crash_angle_deg);
+               "CRASH DETECTED: Angle > %.0f deg", CRASH_ANGLE_DEG);
     }
 
     // Gyro rate-based: detect rapid rotation (impact/crash) even if filtered
@@ -153,71 +150,52 @@ static void control_loop_task(void *arg) {
                "CRASH DETECTED: Gyro > %.0f dps", CRASH_GYRO_RATE_DPS);
     }
 
-    // 3. Read RX Channels
+    // 3. Calculate Rate Setpoints
+    // SIMPLIFIED: Direct rate commands (no angle loop)
+    // Option 1: Use RX sticks for direct rate control
     uint16_t rx_roll = rx_get_channel(0);
     uint16_t rx_pitch = rx_get_channel(1);
     uint16_t rx_thr = rx_get_channel(2);
     uint16_t rx_yaw = rx_get_channel(3);
 
-    // Map Yaw (always rate controlled)
+    const float MAX_RATE_DPS = 100.0f; // Max 100 deg/s for manual rate mode
+
+    float target_roll_rate = 0.0f;
+    if (abs(rx_roll - 1500) > RC_DEADBAND_US) {
+      target_roll_rate = (float)(rx_roll - 1500) / 500.0f * MAX_RATE_DPS;
+    }
+
+    float target_pitch_rate = 0.0f;
+    if (abs(rx_pitch - 1500) > RC_DEADBAND_US) {
+      target_pitch_rate = (float)(rx_pitch - 1500) / 500.0f * MAX_RATE_DPS;
+    }
+
     float target_yaw_rate = 0.0f;
     if (abs(rx_yaw - 1500) > RC_DEADBAND_US) {
       target_yaw_rate = (float)(rx_yaw - 1500) / 500.0f * RC_MAX_YAW_RATE_DPS;
     }
 
-    // Map Roll/Pitch Stick -> Angle Target
-    float target_roll = 0.0f;
-    if (abs(rx_roll - 1500) > RC_DEADBAND_US) {
-      target_roll = (float)(rx_roll - 1500) / 500.0f * RC_MAX_ANGLE_DEG;
-    }
+    // 4. Update webserver live display
+    webserver_set_rate_targets(target_roll_rate, target_pitch_rate);
 
-    float target_pitch = 0.0f;
-    if (abs(rx_pitch - 1500) > RC_DEADBAND_US) {
-      target_pitch = (float)(rx_pitch - 1500) / 500.0f * RC_MAX_ANGLE_DEG;
-    }
-
-    // Update webserver live display with target angles
-    webserver_set_targets(target_roll, target_pitch);
-
-    // 4. Cascade Control: Angle -> Rate
-    // Angle loop output = rate setpoint for Rate loop
-    // When Angle P = 0, angle_control outputs 0, so Rate loop targets 0 deg/s
-    angle_control_update(imu->roll_deg, imu->pitch_deg, target_roll,
-                         target_pitch, 1.0f / CONTROL_LOOP_FREQ_HZ);
-    const angle_output_t *angle_out = angle_control_get_output();
-
-    // Rate loop: try to achieve the rate setpoint from angle loop (0 when P=0)
-    rate_control_update(angle_out->roll_rate_setpoint,
-                        angle_out->pitch_rate_setpoint, target_yaw_rate,
+    // 5. Rate PID Control (Inner Loop Only)
+    rate_control_update(target_roll_rate, target_pitch_rate, target_yaw_rate,
                         imu->gyro_x_dps, imu->gyro_y_dps, imu->gyro_z_dps);
 
-    // 5. Update Mixer
     const rate_output_t *pid_out = rate_control_get_output();
 
-    // Throttle:
-    // DIRECT RX CONTROL
-    // If armed, use the mapped RX throttle.
-    // If disarmed, mixer handles it (stops).
+    // 5. Mixer - Direct Throttle Control
     uint16_t throttle = system_armed ? rx_thr : 1000;
 
     // Safety: Ensure throttle doesn't drop below min or exceed max
     if (throttle < 1000)
       throttle = 1000;
-    if (throttle > TUNING_THROTTLE_LIMIT) // Limited for tuning safety
-      throttle = TUNING_THROTTLE_LIMIT;
-
-    // Integral Anti-Windup: Freeze I-term when throttle is low (on ground)
-    // Threshold lowered from 1200 to 1080 to allow I-term during low-throttle
-    // tuning
-    bool freeze_integral = (throttle < 1080);
-    rate_control_freeze_integral(freeze_integral);
-    angle_control_freeze_integral(freeze_integral);
 
     mixer_update(throttle, pid_out->roll, pid_out->pitch, pid_out->yaw);
 
     int64_t end_time = esp_timer_get_time();
 
-    // 5. Store Debug Data
+    // 6. Store Debug Data (for serial print)
     if (++debug_counter >= DEBUG_PRINT_DIVIDER) {
       debug_counter = 0;
       control_loop_flag = true;
@@ -225,13 +203,6 @@ static void control_loop_task(void *arg) {
       debug_gyro[0] = imu->gyro_x_dps;
       debug_gyro[1] = imu->gyro_y_dps;
       debug_gyro[2] = imu->gyro_z_dps;
-
-      debug_angle[0] = imu->roll_deg;
-      debug_angle[1] = imu->pitch_deg;
-
-      debug_setpoint[0] = target_roll;
-      debug_setpoint[1] = target_pitch;
-      debug_integral_active = (int)!freeze_integral;
 
       debug_pid[0] = pid_out->roll;
       debug_pid[1] = pid_out->pitch;
@@ -249,14 +220,8 @@ static void control_loop_task(void *arg) {
 
       // Calculate expanded flags
       uint16_t bb_flags = 0;
-      if (system_armed)
-        bb_flags |= BLACKBOX_FLAG_ARMED;
       if (error_state)
         bb_flags |= BLACKBOX_FLAG_ERROR;
-      if (angle_control_in_recovery())
-        bb_flags |= BLACKBOX_FLAG_RECOVERY;
-      if (freeze_integral)
-        bb_flags |= BLACKBOX_FLAG_I_FROZEN;
       // Add low battery flag
       if (debug_vbat > 0 && debug_vbat < sys_cfg.low_bat_threshold)
         bb_flags |= BLACKBOX_FLAG_LOW_BAT;
@@ -280,23 +245,11 @@ static void control_loop_task(void *arg) {
           .accel_y = imu->accel_y_g,
           .accel_z = imu->accel_z_g,
 
-          // Fused Angles
-          .angle_roll = imu->roll_deg,
-          .angle_pitch = imu->pitch_deg,
-
-          // Angle Loop (Outer) - setpoints and errors
-          .angle_setpoint_roll = target_roll,
-          .angle_setpoint_pitch = target_pitch,
-          .angle_error_roll = target_roll - imu->roll_deg,
-          .angle_error_pitch = target_pitch - imu->pitch_deg,
-          .angle_i_term_roll = angle_control_get_i_roll(),
-          .angle_i_term_pitch = angle_control_get_i_pitch(),
-
-          // Rate Loop (Inner) - setpoints and errors
-          .rate_setpoint_roll = angle_out->roll_rate_setpoint,
-          .rate_setpoint_pitch = angle_out->pitch_rate_setpoint,
-          .rate_error_roll = angle_out->roll_rate_setpoint - imu->gyro_x_dps,
-          .rate_error_pitch = angle_out->pitch_rate_setpoint - imu->gyro_y_dps,
+          // Rate Loop - setpoints and errors
+          .rate_setpoint_roll = target_roll_rate,
+          .rate_setpoint_pitch = target_pitch_rate,
+          .rate_error_roll = target_roll_rate - imu->gyro_x_dps,
+          .rate_error_pitch = target_pitch_rate - imu->gyro_y_dps,
           .rate_i_term_roll = rate_control_get_i_roll(),
           .rate_i_term_pitch = rate_control_get_i_pitch(),
           .rate_i_term_yaw = rate_control_get_i_yaw(),
@@ -495,9 +448,8 @@ void app_main(void) {
   printf("========================================\n\n");
   // ========== END LEVEL CHECK ==========
 
-  // 5. Init Control Loops
+  // 5. Init Rate Control Only
   rate_control_init();
-  angle_control_init();
 
   // 6. Start Control Loop on Core 1 (dedicated for flight-critical code)
   // Core 0: WiFi, Webserver, Logger (background I/O)
@@ -545,9 +497,8 @@ void app_main(void) {
           // All checks passed - ARM!
           system_armed = true;
 
-          // Reset PIDs to prevent I-term windup from ground handling
+          // Reset PIDs to prevent I-term windup
           rate_control_init();
-          angle_control_init();
 
           mixer_arm(true);
           blackbox_clear(); // Clear old data
@@ -621,19 +572,11 @@ void app_main(void) {
       uint16_t rx_ch[RX_CHANNEL_COUNT];
       rx_get_all(rx_ch);
 
-      // === FAST DEBUG PRINT - For bench testing ===
-      // Format: Angles | PID Outputs | Motors
-      // R/P = Roll/Pitch angles (deg)
-      // Pr/Pp = PID output for roll/pitch (what goes to mixer)
-      // M1-M4 = Motor PWM values
-      // Format: Setpoints | Angles | I-Term | PID Outputs | Motors
-      // S: Setpoint, A: Angle, I: Integral Active (1=Yes, 0=No)
-      printf("S:%+5.1f|%+5.1f A:%+5.1f|%+5.1f I:%d | P:%+6.1f|%+6.1f | M:%4d "
-             "%4d %4d %4d\n",
-             debug_setpoint[0], debug_setpoint[1], // Setpoints
-             debug_angle[0], debug_angle[1],       // Actual Angles
-             debug_integral_active,                // Integral Active?
-             debug_pid[0], debug_pid[1],           // PID outputs
+      // Simplified debug: Gyro | PID | Motors
+      printf("G:%+6.1f|%+6.1f|%+6.1f P:%+6.1f|%+6.1f|%+6.1f M:%4d %4d %4d "
+             "%4d\n",
+             debug_gyro[0], debug_gyro[1], debug_gyro[2], // Gyro rates
+             debug_pid[0], debug_pid[1], debug_pid[2],    // PID outputs
              debug_motors[0], debug_motors[1], debug_motors[2],
              debug_motors[3]);
 

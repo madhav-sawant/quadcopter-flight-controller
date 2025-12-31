@@ -1,6 +1,5 @@
 #include "webserver.h"
 #include "../adc/adc.h"
-#include "../angle_control/angle_control.h"
 #include "../blackbox/blackbox.h"
 #include "../config/config.h"
 #include "../imu/imu.h"
@@ -40,8 +39,6 @@ static const char *HTML_PAGE =
     "fetch('/live').then(r=>r.json()).then(d=>{"
     "document.getElementById('tr').innerText=d.tr.toFixed(1);"
     "document.getElementById('tp').innerText=d.tp.toFixed(1);"
-    "document.getElementById('ar').innerText=d.ar.toFixed(1);"
-    "document.getElementById('ap').innerText=d.ap.toFixed(1);"
     "document.getElementById('rr').innerText=d.rr.toFixed(1);"
     "document.getElementById('rp').innerText=d.rp.toFixed(1);"
     "document.getElementById('armed').innerText=d.armed?'ARMED':'DISARMED';"
@@ -53,14 +50,13 @@ static const char *HTML_PAGE =
     "<h2>QuadPID - Bat: %d mV</h2>"
     "<h3>Status: <span id='armed' style='color:gray'>--</span> | %s</h3>"
     "<div class='live'>"
-    "<b>Live Angles (deg)</b><br>"
+    "<b>Live Rates (deg/s)</b><br>"
     "<table>"
-    "<tr><th></th><th class='tgt'>Target</th><th class='act'>Actual</th><th "
-    "class='rate'>Rate SP</th></tr>"
+    "<tr><th></th><th class='tgt'>Target</th><th class='act'>Actual</th></tr>"
     "<tr><td>Roll:</td><td class='tgt' id='tr'>--</td><td class='act' "
-    "id='ar'>--</td><td class='rate' id='rr'>--</td></tr>"
+    "id='rr'>--</td></tr>"
     "<tr><td>Pitch:</td><td class='tgt' id='tp'>--</td><td class='act' "
-    "id='ap'>--</td><td class='rate' id='rp'>--</td></tr>"
+    "id='rp'>--</td></tr>"
     "</table></div>"
     "<form method=POST action=/s>"
     "<b>Rate Roll</b> P:<input name=rp value=%.3f size=6> "
@@ -71,13 +67,7 @@ static const char *HTML_PAGE =
     "D:<input name=pd value=%.3f size=6><br>"
     "<b>Rate Yaw</b> P:<input name=yp value=%.3f size=6> "
     "I:<input name=yi value=%.3f size=6> "
-    "D:<input name=yd value=%.3f size=6><br>"
-    "<b>Angle</b> Roll P:<input name=arp value=%.3f size=6> "
-    "I:<input name=ari value=%.3f size=6> "
-    "D:<input name=ard value=%.3f size=6><br>"
-    "Pitch P:<input name=app value=%.3f size=6> "
-    "I:<input name=api value=%.3f size=6> "
-    "D:<input name=apd value=%.3f size=6><br><br>"
+    "D:<input name=yd value=%.3f size=6><br><br>"
     "<input type=submit value=SAVE></form>"
     "<form method=POST action=/r><input type=submit value=RESET></form>"
     "<hr><a href=/blackbox>Download Blackbox CSV</a> | "
@@ -120,9 +110,7 @@ static esp_err_t get_handler(httpd_req_t *req) {
   snprintf(html, 4096, HTML_PAGE, adc_read_battery_voltg(), system_status_msg,
            sys_cfg.roll_kp, sys_cfg.roll_ki, sys_cfg.roll_kd, sys_cfg.pitch_kp,
            sys_cfg.pitch_ki, sys_cfg.pitch_kd, sys_cfg.yaw_kp, sys_cfg.yaw_ki,
-           sys_cfg.yaw_kd, sys_cfg.angle_roll_kp, sys_cfg.angle_roll_ki,
-           sys_cfg.angle_roll_kd, sys_cfg.angle_pitch_kp,
-           sys_cfg.angle_pitch_ki, sys_cfg.angle_pitch_kd, msg, err_msg);
+           sys_cfg.yaw_kd, msg, err_msg);
 
   httpd_resp_send(req, html, strlen(html));
   free(html);
@@ -153,12 +141,6 @@ static esp_err_t save_handler(httpd_req_t *req) {
   sys_cfg.yaw_kp = parse_float(buf, "yp", sys_cfg.yaw_kp);
   sys_cfg.yaw_ki = parse_float(buf, "yi", sys_cfg.yaw_ki);
   sys_cfg.yaw_kd = parse_float(buf, "yd", sys_cfg.yaw_kd);
-  sys_cfg.angle_roll_kp = parse_float(buf, "arp", sys_cfg.angle_roll_kp);
-  sys_cfg.angle_roll_ki = parse_float(buf, "ari", sys_cfg.angle_roll_ki);
-  sys_cfg.angle_roll_kd = parse_float(buf, "ard", sys_cfg.angle_roll_kd);
-  sys_cfg.angle_pitch_kp = parse_float(buf, "app", sys_cfg.angle_pitch_kp);
-  sys_cfg.angle_pitch_ki = parse_float(buf, "api", sys_cfg.angle_pitch_ki);
-  sys_cfg.angle_pitch_kd = parse_float(buf, "apd", sys_cfg.angle_pitch_kd);
 
   config_save_to_nvs();
   rate_control_init(); // Reload PID gains into controllers
@@ -194,15 +176,13 @@ static esp_err_t blackbox_handler(httpd_req_t *req) {
                      "attachment; filename=blackbox.csv");
 
   // Send CSV header - EXPANDED for deep analysis
+  // Send CSV header - SIMPLIFIED for rate only
   const char *header = "time_ms,flags,"
-                       "gyro_x,gyro_y,gyro_z,"           // Gyro rates
-                       "accel_x,accel_y,accel_z,"        // Raw accelerometer
-                       "roll,pitch,"                     // Fused angles
-                       "angle_sp_roll,angle_sp_pitch,"   // Angle setpoints
-                       "angle_err_roll,angle_err_pitch," // Angle errors
-                       "angle_i_roll,angle_i_pitch,"     // Angle I-terms
-                       "rate_sp_roll,rate_sp_pitch,"     // Rate setpoints
-                       "rate_err_roll,rate_err_pitch,"   // Rate errors
+                       "gyro_x,gyro_y,gyro_z,"         // Gyro rates
+                       "accel_x,accel_y,accel_z,"      // Raw accelerometer
+                       "roll,pitch,"                   // Fused angles (ref)
+                       "rate_sp_roll,rate_sp_pitch,"   // Rate setpoints
+                       "rate_err_roll,rate_err_pitch," // Rate errors
                        "rate_i_roll,rate_i_pitch,rate_i_yaw," // Rate I-terms
                        "pid_roll,pid_pitch,pid_yaw,"          // PID outputs
                        "m1,m2,m3,m4,"                         // Motors
@@ -286,39 +266,35 @@ static esp_err_t calibrate_handler(httpd_req_t *req) {
   return ESP_OK;
 }
 
-// Live data JSON endpoint - returns target/actual angles for real-time display
-// External variables to store target angles (set by main.c control loop)
-static float live_target_roll = 0.0f;
-static float live_target_pitch = 0.0f;
+// Live data JSON endpoint - returns target/actual RATES
+static float live_target_roll_rate = 0.0f;
+static float live_target_pitch_rate = 0.0f;
 
-void webserver_set_targets(float roll, float pitch) {
-  live_target_roll = roll;
-  live_target_pitch = pitch;
+void webserver_set_rate_targets(float roll_rate, float pitch_rate) {
+  live_target_roll_rate = roll_rate;
+  live_target_pitch_rate = pitch_rate;
 }
 
 static esp_err_t live_handler(httpd_req_t *req) {
+  const rate_output_t *rate_out = rate_control_get_output();
+
+  // Actual rates are what the PID computed (or we could use GYRO data?)
+  // Let's use the PID's MEASURED rate (which is gyro)
+  // Actually rate_control_get_output returns the PID OUTPUT, not the measured
+  // rate. We need to fetch IMU data for actual rates.
   const imu_data_t *imu = imu_get_data();
-  const angle_output_t *angle_out = angle_control_get_output();
 
-  // Safety: return default values if data not yet available
-  float roll_deg = 0.0f, pitch_deg = 0.0f;
-  float roll_rate_sp = 0.0f, pitch_rate_sp = 0.0f;
-
-  if (imu != NULL) {
-    roll_deg = imu->roll_deg;
-    pitch_deg = imu->pitch_deg;
-  }
-  if (angle_out != NULL) {
-    roll_rate_sp = angle_out->roll_rate_setpoint;
-    pitch_rate_sp = angle_out->pitch_rate_setpoint;
+  float roll_rate_act = 0.0f, pitch_rate_act = 0.0f;
+  if (imu) {
+    roll_rate_act = imu->gyro_x_dps;
+    pitch_rate_act = imu->gyro_y_dps;
   }
 
   char json[256];
   snprintf(json, sizeof(json),
-           "{\"tr\":%.2f,\"tp\":%.2f,\"ar\":%.2f,\"ap\":%.2f,"
-           "\"rr\":%.2f,\"rp\":%.2f,\"armed\":%s}",
-           live_target_roll, live_target_pitch, roll_deg, pitch_deg,
-           roll_rate_sp, pitch_rate_sp, system_armed ? "true" : "false");
+           "{\"tr\":%.2f,\"tp\":%.2f,\"rr\":%.2f,\"rp\":%.2f,\"armed\":%s}",
+           live_target_roll_rate, live_target_pitch_rate, roll_rate_act,
+           pitch_rate_act, system_armed ? "true" : "false");
 
   httpd_resp_set_type(req, "application/json");
   httpd_resp_send(req, json, strlen(json));

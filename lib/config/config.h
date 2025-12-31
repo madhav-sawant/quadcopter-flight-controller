@@ -18,21 +18,11 @@ typedef struct {
   float yaw_ki;
   float yaw_kd;
 
-  // Angle PID Gains (full PID for outer loop)
-  float angle_roll_kp;
-  float angle_roll_ki;
-  float angle_roll_kd;
-
-  float angle_pitch_kp;
-  float angle_pitch_ki;
-  float angle_pitch_kd;
-
   // Limits
   float rate_output_limit;
   float rate_integral_limit;
 
   // Safety
-  float crash_angle_deg;
   uint16_t low_bat_threshold;
 } system_config_t;
 

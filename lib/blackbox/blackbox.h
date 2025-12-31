@@ -29,16 +29,8 @@ typedef struct __attribute__((packed)) {
       accel_z; // Accelerometer (g) - RAW for vibration analysis
 
   // === FUSED ANGLES (8 bytes) ===
-  float angle_roll, angle_pitch; // Complementary filter output (deg)
-
-  // === ANGLE LOOP - OUTER (20 bytes) ===
-  // Critical for understanding self-leveling behavior
-  float angle_setpoint_roll;  // Target angle from RC (deg)
-  float angle_setpoint_pitch; // Target angle from RC (deg)
-  float angle_error_roll;     // Setpoint - Actual (deg)
-  float angle_error_pitch;    // Setpoint - Actual (deg)
-  float angle_i_term_roll;    // Angle I-term (for drift diagnosis)
-  float angle_i_term_pitch;   // Angle I-term (for drift diagnosis)
+  float angle_roll,
+      angle_pitch; // Complementary filter output (deg) - KEEP for reference
 
   // === RATE LOOP - INNER (28 bytes) ===
   // Critical for understanding oscillation and response
@@ -67,15 +59,14 @@ typedef struct __attribute__((packed)) {
   int8_t cpu_temp;       // ESP32 temperature (°C) - optional
   uint8_t pad;           // Padding for alignment
 
-} blackbox_entry_t; // Total: ~110 bytes
+} blackbox_entry_t;
 
 // ============================================================================
 // FLAG BIT DEFINITIONS (expanded)
 // ============================================================================
-#define BLACKBOX_FLAG_ARMED (1 << 0)    // Motors armed
-#define BLACKBOX_FLAG_ERROR (1 << 1)    // System error
-#define BLACKBOX_FLAG_RECOVERY (1 << 2) // In angle recovery mode (>45°)
-#define BLACKBOX_FLAG_I_FROZEN (1 << 3) // I-term frozen (low throttle)
+#define BLACKBOX_FLAG_ARMED (1 << 0) // Motors armed
+#define BLACKBOX_FLAG_ERROR (1 << 1) // System error
+// (1<<2) and (1<<3) reserved/unused
 #define BLACKBOX_FLAG_LOW_BAT (1 << 4)  // Low battery warning
 #define BLACKBOX_FLAG_RX_LOSS (1 << 5)  // RC signal lost
 #define BLACKBOX_FLAG_GYRO_SAT (1 << 6) // Gyro saturation detected
