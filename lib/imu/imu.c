@@ -30,7 +30,7 @@
 #define I2C_MASTER_TIMEOUT_MS 1000
 
 #define COMPLEMENTARY_ALPHA                                                    \
-  0.96f // Improved from 0.80 for better vibration rejection and less drift
+  0.995f // 99.5% gyro - minimizes accel EMI from receiver
 #define GYRO_SCALE_FACTOR 16.4f
 #define ACCEL_SCALE_FACTOR 4096.0f
 #define RAD_TO_DEG 57.2957795f
@@ -56,11 +56,10 @@ static float accel_scale_factor = 1.0f;
 
 // Manual trim offsets for PHYSICAL sensor mounting angle
 // These compensate for MPU6050 not being perfectly level on the frame
-// Measured: MPU is mounted ~2° pitched forward
 // Positive PITCH = compensate for forward tilt (nose down mounting)
 // Positive ROLL = compensate for right wing low mounting
-// UPDATED 2024-12-31: Offset based on blackbox level analysis (Session 21).
-#define PITCH_TRIM_DEG -1.3f
+// Trims set to 0.0 - Calibrate via Dashboard!
+#define PITCH_TRIM_DEG 0.0f
 #define ROLL_TRIM_DEG 0.0f
 
 // Filtered sensor values (software LPF on top of hardware DLPF)

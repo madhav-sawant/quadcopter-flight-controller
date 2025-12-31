@@ -31,6 +31,12 @@ void config_load_defaults(void) {
   sys_cfg.rate_integral_limit =
       50.0f; // Limit I-term authority to 50 (Output limit is 110)
 
+  // Angle Mode (Outer Loop) - Self-Leveling
+  sys_cfg.angle_kp = 3.0f; // Conservative: 3 deg/s per degree of error
+  sys_cfg.angle_ki =
+      0.0f; // No I-term initially (prevents slow drift accumulation)
+  sys_cfg.angle_max = 45.0f; // Max tilt angle in degrees
+
   // Safety
   sys_cfg.low_bat_threshold = 10500; // 10.5V
 }
@@ -53,6 +59,9 @@ void config_save_to_nvs(void) {
   nvs_set_blob(handle, "yaw_kp", &sys_cfg.yaw_kp, sizeof(float));
   nvs_set_blob(handle, "yaw_ki", &sys_cfg.yaw_ki, sizeof(float));
   nvs_set_blob(handle, "yaw_kd", &sys_cfg.yaw_kd, sizeof(float));
+
+  // Angle Mode
+  nvs_set_blob(handle, "angle_kp", &sys_cfg.angle_kp, sizeof(float));
 
   nvs_commit(handle);
   nvs_close(handle);
@@ -98,6 +107,9 @@ bool config_load_from_nvs(void) {
   success &= load_float(handle, "yaw_kp", &sys_cfg.yaw_kp);
   success &= load_float(handle, "yaw_ki", &sys_cfg.yaw_ki);
   success &= load_float(handle, "yaw_kd", &sys_cfg.yaw_kd);
+
+  // Angle Mode (optional - use default if not found)
+  load_float(handle, "angle_kp", &sys_cfg.angle_kp);
 
   nvs_close(handle);
   return success;

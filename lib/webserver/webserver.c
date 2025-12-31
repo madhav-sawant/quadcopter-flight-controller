@@ -67,7 +67,9 @@ static const char *HTML_PAGE =
     "D:<input name=pd value=%.3f size=6><br>"
     "<b>Rate Yaw</b> P:<input name=yp value=%.3f size=6> "
     "I:<input name=yi value=%.3f size=6> "
-    "D:<input name=yd value=%.3f size=6><br><br>"
+    "D:<input name=yd value=%.3f size=6><br>"
+    "<hr><b>Angle P</b>:<input name=ap value=%.2f size=6> "
+    "(Self-Level Strength)<br><br>"
     "<input type=submit value=SAVE></form>"
     "<form method=POST action=/r><input type=submit value=RESET></form>"
     "<hr><a href=/blackbox>Download Blackbox CSV</a> | "
@@ -110,7 +112,7 @@ static esp_err_t get_handler(httpd_req_t *req) {
   snprintf(html, 4096, HTML_PAGE, adc_read_battery_voltg(), system_status_msg,
            sys_cfg.roll_kp, sys_cfg.roll_ki, sys_cfg.roll_kd, sys_cfg.pitch_kp,
            sys_cfg.pitch_ki, sys_cfg.pitch_kd, sys_cfg.yaw_kp, sys_cfg.yaw_ki,
-           sys_cfg.yaw_kd, msg, err_msg);
+           sys_cfg.yaw_kd, sys_cfg.angle_kp, msg, err_msg);
 
   httpd_resp_send(req, html, strlen(html));
   free(html);
@@ -141,6 +143,7 @@ static esp_err_t save_handler(httpd_req_t *req) {
   sys_cfg.yaw_kp = parse_float(buf, "yp", sys_cfg.yaw_kp);
   sys_cfg.yaw_ki = parse_float(buf, "yi", sys_cfg.yaw_ki);
   sys_cfg.yaw_kd = parse_float(buf, "yd", sys_cfg.yaw_kd);
+  sys_cfg.angle_kp = parse_float(buf, "ap", sys_cfg.angle_kp);
 
   config_save_to_nvs();
   rate_control_init(); // Reload PID gains into controllers

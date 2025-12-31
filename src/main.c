@@ -71,7 +71,7 @@
 // RC Mapping
 #define RC_MAX_ANGLE_DEG 45.0f
 #define RC_MAX_YAW_RATE_DPS 180.0f
-#define RC_DEADBAND_US 20
+#define RC_DEADBAND_US 50 // Increased from 20 - FlySky may not center exactly
 
 /* -------------------------------------------------------------------------- */
 /*                               Global State                                 */
@@ -150,25 +150,55 @@ static void control_loop_task(void *arg) {
                "CRASH DETECTED: Gyro > %.0f dps", CRASH_GYRO_RATE_DPS);
     }
 
-    // 3. Calculate Rate Setpoints
-    // Map RC stick inputs to target rotation rates (deg/s)
+    // 3. Read RC Stick Inputs
     uint16_t rx_roll = rx_get_channel(0);
     uint16_t rx_pitch = rx_get_channel(1);
     uint16_t rx_thr = rx_get_channel(2);
     uint16_t rx_yaw = rx_get_channel(3);
+    uint16_t rx_aux2 = rx_get_channel(5); // AUX2 for future mode switch
+    (void)
+        rx_aux2; // Suppress unused warning - will be used for mode switch later
 
-    const float MAX_RATE_DPS = 100.0f; // Max 100 deg/s for manual rate mode
+    // ========================================================================
+    // ANGLE MODE (Self-Leveling) - ALWAYS ACTIVE
+    // ========================================================================
+    // Control Flow:
+    //   Stick -> Target Angle -> Angle Error -> Angle P -> Target Rate -> Rate
+    //   PID
+    // ========================================================================
 
-    float target_roll_rate = 0.0f;
+    // 3a. Map Stick to Target Angle (±angle_max degrees)
+    float target_roll_angle = 0.0f;
     if (abs(rx_roll - 1500) > RC_DEADBAND_US) {
-      target_roll_rate = (float)(rx_roll - 1500) / 500.0f * MAX_RATE_DPS;
+      target_roll_angle = (float)(rx_roll - 1500) / 500.0f * sys_cfg.angle_max;
     }
 
-    float target_pitch_rate = 0.0f;
+    float target_pitch_angle = 0.0f;
     if (abs(rx_pitch - 1500) > RC_DEADBAND_US) {
-      target_pitch_rate = (float)(rx_pitch - 1500) / 500.0f * MAX_RATE_DPS;
+      target_pitch_angle =
+          (float)(rx_pitch - 1500) / 500.0f * sys_cfg.angle_max;
     }
 
+    // 3b. Calculate Angle Error
+    float roll_angle_error = target_roll_angle - imu->roll_deg;
+    float pitch_angle_error = target_pitch_angle - imu->pitch_deg;
+
+    // 3c. Angle P Controller -> Outputs Target Rate (deg/s)
+    float target_roll_rate = sys_cfg.angle_kp * roll_angle_error;
+    float target_pitch_rate = sys_cfg.angle_kp * pitch_angle_error;
+
+    // 3d. Clamp target rates to prevent excessive commands
+    const float MAX_ANGLE_RATE = 150.0f; // Max rate output from angle loop
+    if (target_roll_rate > MAX_ANGLE_RATE)
+      target_roll_rate = MAX_ANGLE_RATE;
+    if (target_roll_rate < -MAX_ANGLE_RATE)
+      target_roll_rate = -MAX_ANGLE_RATE;
+    if (target_pitch_rate > MAX_ANGLE_RATE)
+      target_pitch_rate = MAX_ANGLE_RATE;
+    if (target_pitch_rate < -MAX_ANGLE_RATE)
+      target_pitch_rate = -MAX_ANGLE_RATE;
+
+    // 3e. Yaw remains Rate Mode (no angle control for yaw)
     float target_yaw_rate = 0.0f;
     if (abs(rx_yaw - 1500) > RC_DEADBAND_US) {
       target_yaw_rate = (float)(rx_yaw - 1500) / 500.0f * RC_MAX_YAW_RATE_DPS;
@@ -177,7 +207,7 @@ static void control_loop_task(void *arg) {
     // 4. Update webserver live display
     webserver_set_rate_targets(target_roll_rate, target_pitch_rate);
 
-    // 5. Rate PID Control (Inner Loop Only)
+    // 5. Rate PID Control (Inner Loop) - Takes rate setpoints from Angle Loop
     rate_control_update(target_roll_rate, target_pitch_rate, target_yaw_rate,
                         imu->gyro_x_dps, imu->gyro_y_dps, imu->gyro_z_dps);
 
@@ -213,6 +243,11 @@ static void control_loop_task(void *arg) {
                         &debug_motors[3]);
 
       debug_exec_time_us = end_time - start_time;
+
+      // DEBUG: Print raw IMU angles to serial (DISABLED)
+      // printf("IMU: Roll=%.1f Pitch=%.1f | Target: R=%.1f P=%.1f\n",
+      //        imu->roll_deg, imu->pitch_deg, target_roll_rate,
+      //        target_pitch_rate);
     }
 
     // 6. Blackbox Logging (50Hz - every 10th iteration) - ONLY WHEN ARMED
@@ -357,23 +392,38 @@ void app_main(void) {
       vTaskDelay(100);
   }
 
-  // 4. Gyro/Accel Calibration (load from NVS if available)
-  if (imu_calibration_load_from_nvs()) {
-    printf("IMU Calibration loaded from NVS.\n");
-  } else {
-    printf("Calibrating Gyro... Keep Still.\n");
-    vTaskDelay(pdMS_TO_TICKS(1000));
-    imu_calibrate_gyro();
-    printf("Gyro Calibrated.\n");
+  // 4. Gyro/Accel Calibration
+  // 4. Gyro/Accel Calibration with LED Feedback
+  // Step 1: solid LED for 3s - TIME TO PLACE DRONE FLAT
+  printf("BOOT: Place drone flat! Calibration in 3 seconds...\n");
+  gpio_set_level(LED_PIN, 1); // LED ON
+  vTaskDelay(pdMS_TO_TICKS(3000));
 
-    printf("Calibrating Accel... Keep Level.\n");
-    imu_calibrate_accel();
-    printf("Accel Calibrated.\n");
+  // Step 2: Gyro Calibration
+  printf("IMU: Calibrating Gyro... KEEP STILL!\n");
+  gpio_set_level(LED_PIN, 0); // OFF
 
-    // Save calibration to NVS for next boot
-    imu_calibration_save_to_nvs();
-    printf("Calibration saved to NVS.\n");
+  // Fast blink during calibration (simulated by toggling around the cal call)
+  // Since cal is blocking, we turn it off, run cal, then blink success.
+  // Ideally calibration would be non-blocking but blocking is safer here.
+
+  imu_calibrate_gyro();
+  printf("IMU: Gyro Calibrated.\n");
+  imu_calibration_save_to_nvs();
+
+  // Step 3: SUCCESS SIGNAL (Pulse LED 3 times)
+  for (int i = 0; i < 3; i++) {
+    gpio_set_level(LED_PIN, 1);
+    vTaskDelay(pdMS_TO_TICKS(100)); // ON
+    gpio_set_level(LED_PIN, 0);
+    vTaskDelay(pdMS_TO_TICKS(100)); // OFF
   }
+  vTaskDelay(pdMS_TO_TICKS(500)); // Pause
+
+  if (imu_calibration_load_from_nvs()) {
+    printf("IMU: Accel loaded from NVS.\n");
+  }
+  printf("BOOT: System Ready.\n");
 
   // ========== LEVEL CHECK ==========
   // Take multiple IMU readings and check if quad is level
