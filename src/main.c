@@ -90,7 +90,9 @@ char system_status_msg[64] = "System Ready"; // Global status message
 
 // Debug data
 static float debug_gyro[3];
-static float debug_angle[2]; // Roll, Pitch
+static float debug_angle[2];      // Roll, Pitch
+static float debug_setpoint[2];   // Target Roll, Pitch
+static int debug_integral_active; // 1=Active, 0=Frozen
 static float debug_pid[3];
 static uint16_t debug_motors[4];
 static uint16_t debug_vbat = 0;
@@ -226,6 +228,10 @@ static void control_loop_task(void *arg) {
 
       debug_angle[0] = imu->roll_deg;
       debug_angle[1] = imu->pitch_deg;
+
+      debug_setpoint[0] = target_roll;
+      debug_setpoint[1] = target_pitch;
+      debug_integral_active = (int)!freeze_integral;
 
       debug_pid[0] = pid_out->roll;
       debug_pid[1] = pid_out->pitch;
@@ -620,10 +626,14 @@ void app_main(void) {
       // R/P = Roll/Pitch angles (deg)
       // Pr/Pp = PID output for roll/pitch (what goes to mixer)
       // M1-M4 = Motor PWM values
-      printf("R:%+5.1f P:%+5.1f | Pr:%+6.1f Pp:%+6.1f | M1:%4d M2:%4d M3:%4d "
-             "M4:%4d\n",
-             debug_angle[0], debug_angle[1], // Angles
-             debug_pid[0], debug_pid[1],     // PID outputs
+      // Format: Setpoints | Angles | I-Term | PID Outputs | Motors
+      // S: Setpoint, A: Angle, I: Integral Active (1=Yes, 0=No)
+      printf("S:%+5.1f|%+5.1f A:%+5.1f|%+5.1f I:%d | P:%+6.1f|%+6.1f | M:%4d "
+             "%4d %4d %4d\n",
+             debug_setpoint[0], debug_setpoint[1], // Setpoints
+             debug_angle[0], debug_angle[1],       // Actual Angles
+             debug_integral_active,                // Integral Active?
+             debug_pid[0], debug_pid[1],           // PID outputs
              debug_motors[0], debug_motors[1], debug_motors[2],
              debug_motors[3]);
 
