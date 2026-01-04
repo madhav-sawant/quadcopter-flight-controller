@@ -1,0 +1,194 @@
+================================================================================
+PAPER REVIEW - CHANGES TRACKING
+Updated: 2026-01-03
+================================================================================
+
+PERSONAL NOTES:
+1. Sir name 
+2. Espressif spelling check
+3. GPS first letter capitalization
+
+================================================================================
+PAGES 1-5 ERRORS (ALL FIXED ✅)
+================================================================================
+
+✅ Error 1: Abstract - Closed/open source confusion - FIXED
+✅ Error 2: Abstract - "Damping factor" → "Damping ratio" - FIXED
+✅ Error 3: Abstract - Clarify simulation values - FIXED
+✅ Error 4: Abstract - Missing period - FIXED
+✅ Error 5: Introduction - "Open Source" as challenge - FIXED
+✅ Error 6: Introduction - "is develop" grammar - FIXED
+✅ Error 7: Literature Review - Kalman contradiction - FIXED
+✅ Error 8: Literature Review - Duplicate paragraph - FIXED
+✅ Error 9: Section 2.1 - Core assignment contradiction - FIXED
+✅ Error 10: Section 2.1 - Missing colon - FIXED
+
+================================================================================
+PAGES 6-10 ERRORS (ALL FIXED ✅)
+================================================================================
+
+✅ Error 11: DUPLICATE HARDWARE DESCRIPTION - FIXED
+   (Merged into single paragraph in Section 7)
+
+✅ Error 12: Missing thrust-to-weight ratio value - FIXED
+   (Now shows "approximately 3.6:1")
+
+================================================================================
+PAGES 11-15 ERRORS (MOSTLY FIXED)
+================================================================================
+
+✅ Error 13: Newton-Euler equation notation - FIXED
+   (Now shows τ = I(dω/dt))
+
+✅ Error 14: WRONG FIGURE REFERENCE - FIXED
+   (Now correctly says "Figure 12 illustrates...")
+
+⬜ Error 15: DUPLICATE/WRONG GRAPH - Figure 13
+   ❌ STILL WRONG! Caption says "Angle mode" but GRAPH IMAGE still shows "Rate Mode"
+   Graph title needs to change to "Angle Mode" OR replace the graph image entirely
+
+⬜ Error 15b: Figure 8 & Figure 12 Caption Formatting - NEEDS FIX
+   Current format mixes diagram name with signals in one paragraph.
+   Need to separate: Name on first line, Signals listed below.
+
+   CURRENT (Figure 12):
+   "Angle Mode Cascade Control with Complementary Filter. Signals: θref = angle setpoint
+   (deg), eθ = angle error, ωsp = rate setpoint, eω = rate error, u = control output, ω = 
+   angular rate, θ̂ = estimated angle from complementary filter"
+
+   FIX - Format like this:
+   "Figure 12: Angle Mode Cascade Control with Complementary Filter.
+   
+   Signals:
+   θref = angle setpoint (deg)
+   eθ = angle error  
+   ωsp = rate setpoint
+   eω = rate error
+   u = control output
+   ω = angular rate
+   θ̂ = estimated angle from complementary filter"
+
+   Apply same formatting fix to Figure 8 (Rate Mode Control Loop Block Diagram):
+
+   CURRENT (Figure 8):
+   "Rate Mode Control Loop Block Diagram. Signals: ωref = rate setpoint (deg/s), e = error,
+   u=control output, ω = measured angular rate, Gc(s) = PID controller, Gp(s) = plant."
+
+   FIX - Format like this:
+   "Figure 8: Rate Mode Control Loop Block Diagram.
+   
+   Signals:
+   ωref = rate setpoint (deg/s)
+   e = error
+   u = control output
+   ω = measured angular rate
+   Gc(s) = PID controller
+   Gp(s) = plant"
+
+================================================================================
+PAGES 16-20 ERRORS (MOSTLY FIXED)
+================================================================================
+
+✅ Error 16: Value discrepancy Table 10 vs Figure 15 - FIXED
+   (Both now show 424 ms rise time, 647 ms settling time)
+
+✅ Error 17: Grammar "Propose Project" - FIXED
+   (Now says "the proposed project avoids")
+
+⬜ Error 18: Section numbering (C.1, C.2) - NOT FIXED
+   ❌ Still shows "3.1 Mapping" and "3.2 Data Formatting"
+   Fix: Change to "C.1 Mapping" and "C.2 Data Formatting"
+
+================================================================================
+PAGES 21-24 ERRORS (MOSTLY FIXED)
+================================================================================
+
+✅ Error 19: Wrong Figure Reference - FIXED
+   (Text removed/rephrased, no wrong Figure 8 reference)
+
+⚠️ Error 20: DUPLICATE Conclusion Paragraph - PARTIAL FIX
+   Still has duplicate text "These results can help in providing..."
+   Appears at end of GCS section AND in Results section
+
+✅ Error 21: Grammar "can connects" - FIXED
+   (Now says "can connect theory")
+
+================================================================================
+NEW ADDITIONS (VERIFIED ✅)
+================================================================================
+
+✅ Figure 18: GCS Circuit schematic - ADDED
+✅ Figure 19: Web application front end - PRESENT
+✅ Figure 20: Prototype setup - PRESENT
+
+⚠️ ESP8266 WiFi Justification - NOT FOUND
+   The circuit explanation is present, but the justification paragraph
+   (about future WiFi compatibility) is not visible in the paper.
+
+================================================================================
+NEW ADDITIONS REQUIRED
+================================================================================
+
+⬜ ESP8266 Justification (Ground Station section)
+Add text explaining why ESP8266 was chosen:
+"The ESP8266 microcontroller was selected for the ground station receiver to maintain 
+architectural consistency with the ESP32-based flight controller. Since the ESP32 features 
+integrated Wi-Fi, future implementations can optionally bypass the nRF24L01 radio link 
+and establish direct Wi-Fi communication between the drone and ground station. Although 
+Wi-Fi significantly decreases the operational range, this forward-compatible design allows 
+students or researchers to experiment with Wi-Fi telemetry by simply updating firmware 
+on both ends, without hardware modifications."
+
+⬜ GCS Circuit Schematic (NEW FIGURE)
+Add circuit explanation:
+"Figure [X] shows the circuit schematic of the ground control station receiver unit. The 
+design consists of an ESP8266 microcontroller interfaced with an nRF24L01 2.4GHz radio 
+module via SPI communication. The nRF24L01 is connected using standard SPI pins: MOSI, 
+MISO, SCK (clock), and CSN (chip select). The CE (Chip Enable) pin controls the radio's 
+transmit/receive mode. The nRF24L01 adapter module is powered through the ESP8266's VIN 
+pin, which outputs 5V when the ESP8266 is USB-powered; the adapter's onboard regulator 
+then provides 3.3V to the radio module."
+
+================================================================================
+GCS SECTION FLOW
+================================================================================
+
+1. First explain WHY ESP8266 was chosen (justification)
+2. Then show GCS CIRCUIT schematic (new figure)
+3. Then show GCS BLOCK DIAGRAM (Figure 17)
+4. Then Web Application screenshot (Figure 18)
+
+================================================================================
+RESULTS SECTION - GRAPH PLACEMENT NOTE
+================================================================================
+
+📝 NOTE: Experimental graphs (Figures 4-7: Accelerometer, Gyroscope, Kalman, Complementary)
+   are placed in METHODOLOGY (Section 8. Experimental graphs), NOT in Results section.
+   
+   This is ACCEPTABLE - they justify sensor fusion choice in methodology.
+   
+   Results section currently only has Figure 20 (Prototype setup photo).
+   
+   OPTIONAL: Add reference text in Results to link back to methodology graphs:
+   "Sensor fusion performance is validated in Section III.B (Figures 4-7)."
+
+================================================================================
+RESULTS SECTION IMPROVEMENT (OPTIONAL)
+================================================================================
+
+Add improved Results text referencing existing figures:
+
+"Experimental validation of the developed UAV was carried out through hover tests and 
+controlled flight experiments. The results demonstrate that the proposed hardware 
+configuration and control methodology provide stable flight performance.
+
+Control System Performance: The rate mode controller achieved a damping ratio of ζ = 0.71 
+with zero overshoot and 79 ms rise time (Figure 10). The angle mode controller demonstrated 
+overdamped response with ζ = 0.96, zero steady-state error, and effective drift compensation 
+(Figure 15). Both controllers exceed standard stability requirements with phase margins of 
+81° (Figures 11 and 16).
+
+Sensor Fusion: The complementary filter successfully mitigated gyroscope drift and 
+accelerometer noise, maintaining attitude estimation accuracy within ±0.5° (Figures 4-7)."
+
+================================================================================

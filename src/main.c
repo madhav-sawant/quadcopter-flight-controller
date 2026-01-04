@@ -94,6 +94,11 @@ static uint16_t debug_motors[4];
 static uint16_t debug_vbat = 0;
 static int64_t debug_exec_time_us = 0;
 
+// Disarm reason tracking (for blackbox debugging)
+// 0 = Not disarmed, 1 = Angle, 2 = Gyro Rate, 3 = RX Loss, 4 = E-Stop, 5 =
+// Switch
+static uint8_t last_disarm_reason = 0;
+
 /* -------------------------------------------------------------------------- */
 /*                   Control Loop Task (Core 1 - 250 Hz)                      */
 /* -------------------------------------------------------------------------- */
@@ -110,10 +115,15 @@ static void control_loop_task(void *arg) {
       1000000 / CONTROL_LOOP_FREQ_HZ; // 4000us for 250Hz
   int64_t next_cycle_time = esp_timer_get_time();
 
+  // Angle Mode Integral State
+  float angle_i_roll = 0.0f;
+  float angle_i_pitch = 0.0f;
+  const float MAX_ANGLE_I_OUTPUT =
+      30.0f; // Limit I-term contribution to 30 deg/s
+
   printf("Control Loop Task started on Core %d\n", xPortGetCoreID());
 
   // Register this task with the Task Watchdog Timer (TWDT)
-  // This is necessary because Core 1 runs at high priority and never yields
   esp_task_wdt_add(NULL);
 
   while (1) {
@@ -127,25 +137,31 @@ static void control_loop_task(void *arg) {
 
     // 2. Safety Checks - Crash Detection
     // Angle-based: if roll or pitch angle is too high, disarm
+    // (Angle Spike Filter in imu.c prevents vibration false triggers)
     const float CRASH_ANGLE_DEG = 60.0f;
     if (fabs(imu->roll_deg) > CRASH_ANGLE_DEG ||
         fabs(imu->pitch_deg) > CRASH_ANGLE_DEG) {
       mixer_arm(false);
       system_armed = false;
       error_state = true;
+      last_disarm_reason = 1; // Angle
+      printf("DISARM: Angle Crash! R=%.1f P=%.1f\n", imu->roll_deg,
+             imu->pitch_deg);
       snprintf(system_status_msg, sizeof(system_status_msg),
                "CRASH DETECTED: Angle > %.0f deg", CRASH_ANGLE_DEG);
     }
 
-    // Gyro rate-based: detect rapid rotation (impact/crash) even if filtered
-    // angles lag 500 deg/s threshold catches most crash scenarios
-    const float CRASH_GYRO_RATE_DPS = 500.0f;
+    // Gyro rate-based: detect rapid rotation (impact/crash)
+    const float CRASH_GYRO_RATE_DPS = 2000.0f;
     if (fabs(imu->gyro_x_dps) > CRASH_GYRO_RATE_DPS ||
         fabs(imu->gyro_y_dps) > CRASH_GYRO_RATE_DPS ||
         fabs(imu->gyro_z_dps) > CRASH_GYRO_RATE_DPS) {
       mixer_arm(false);
       system_armed = false;
       error_state = true;
+      last_disarm_reason = 2; // Gyro Rate
+      printf("DISARM: Gyro Crash! X=%.1f Y=%.1f Z=%.1f\n", imu->gyro_x_dps,
+             imu->gyro_y_dps, imu->gyro_z_dps);
       snprintf(system_status_msg, sizeof(system_status_msg),
                "CRASH DETECTED: Gyro > %.0f dps", CRASH_GYRO_RATE_DPS);
     }
@@ -183,9 +199,40 @@ static void control_loop_task(void *arg) {
     float roll_angle_error = target_roll_angle - imu->roll_deg;
     float pitch_angle_error = target_pitch_angle - imu->pitch_deg;
 
-    // 3c. Angle P Controller -> Outputs Target Rate (deg/s)
-    float target_roll_rate = sys_cfg.angle_kp * roll_angle_error;
-    float target_pitch_rate = sys_cfg.angle_kp * pitch_angle_error;
+    // 3c. Angle PI Controller -> Outputs Target Rate (deg/s)
+    // ------------------------------------------------------------------------
+    // Integration (I-term) to fix steady-state error / drift
+    if (!system_armed) {
+      angle_i_roll = 0.0f;
+      angle_i_pitch = 0.0f;
+    }
+
+    if (sys_cfg.angle_ki > 0.0f) {
+      float dt = 1.0f / CONTROL_LOOP_FREQ_HZ;
+      float max_integral = MAX_ANGLE_I_OUTPUT / sys_cfg.angle_ki;
+
+      // Roll
+      angle_i_roll += roll_angle_error * dt;
+      if (angle_i_roll > max_integral)
+        angle_i_roll = max_integral;
+      else if (angle_i_roll < -max_integral)
+        angle_i_roll = -max_integral;
+
+      // Pitch
+      angle_i_pitch += pitch_angle_error * dt;
+      if (angle_i_pitch > max_integral)
+        angle_i_pitch = max_integral;
+      else if (angle_i_pitch < -max_integral)
+        angle_i_pitch = -max_integral;
+    } else {
+      angle_i_roll = 0.0f;
+      angle_i_pitch = 0.0f;
+    }
+
+    float target_roll_rate = (sys_cfg.angle_kp * roll_angle_error) +
+                             (angle_i_roll * sys_cfg.angle_ki);
+    float target_pitch_rate = (sys_cfg.angle_kp * pitch_angle_error) +
+                              (angle_i_pitch * sys_cfg.angle_ki);
 
     // 3d. Clamp target rates to prevent excessive commands
     const float MAX_ANGLE_RATE = 150.0f; // Max rate output from angle loop
@@ -350,11 +397,11 @@ void app_main(void) {
   // Now init PWM properly (will take over these pins)
   pwm_init();
 
-  // Send stable IDLE signal to all motors for 3 seconds
+  // Send stable IDLE signal to all motors
   for (int i = 0; i < 4; i++) {
     pwm_set_motor(i, 1000);
   }
-  vTaskDelay(pdMS_TO_TICKS(3000)); // ESC arm time
+
   // ========== END ESC BOOT FIX ==========
 
   // 1. Init NVS
@@ -392,24 +439,28 @@ void app_main(void) {
       vTaskDelay(100);
   }
 
-  // 4. Gyro/Accel Calibration
   // 4. Gyro/Accel Calibration with LED Feedback
-  // Step 1: solid LED for 3s - TIME TO PLACE DRONE FLAT
-  printf("BOOT: Place drone flat! Calibration in 3 seconds...\n");
-  gpio_set_level(LED_PIN, 1); // LED ON
-  vTaskDelay(pdMS_TO_TICKS(3000));
+  // COMBINED WAIT: ESC Arming (need time) + Placement (need time)
+  printf(
+      "BOOT: PWM Init Done. Place drone flat! Calibration in 3 seconds...\n");
+  gpio_set_level(LED_PIN, 1);      // LED ON
+  vTaskDelay(pdMS_TO_TICKS(3000)); // 3s for ESCs to arm AND user to place drone
+  gpio_set_level(LED_PIN, 0);      // LED OFF - Calibration starting
 
-  // Step 2: Gyro Calibration
+  // FIRST: Load Accel calibration from NVS (if exists)
+  // This must happen BEFORE gyro calibration to preserve accel offsets
+  if (imu_calibration_load_from_nvs()) {
+    printf("IMU: Accel calibration loaded from NVS.\n");
+  } else {
+    printf("IMU: No accel calibration found - use webserver to calibrate!\n");
+  }
+
+  // THEN: Calibrate Gyro on every boot (gyro bias drifts with temperature)
   printf("IMU: Calibrating Gyro... KEEP STILL!\n");
-  gpio_set_level(LED_PIN, 0); // OFF
-
-  // Fast blink during calibration (simulated by toggling around the cal call)
-  // Since cal is blocking, we turn it off, run cal, then blink success.
-  // Ideally calibration would be non-blocking but blocking is safer here.
-
   imu_calibrate_gyro();
   printf("IMU: Gyro Calibrated.\n");
-  imu_calibration_save_to_nvs();
+  // NOTE: Do NOT save to NVS here - it would overwrite accel with current
+  // values Accel calibration is only saved when done via webserver
 
   // Step 3: SUCCESS SIGNAL (Pulse LED 3 times)
   for (int i = 0; i < 3; i++) {
@@ -420,9 +471,6 @@ void app_main(void) {
   }
   vTaskDelay(pdMS_TO_TICKS(500)); // Pause
 
-  if (imu_calibration_load_from_nvs()) {
-    printf("IMU: Accel loaded from NVS.\n");
-  }
   printf("BOOT: System Ready.\n");
 
   // ========== LEVEL CHECK ==========
@@ -519,7 +567,25 @@ void app_main(void) {
   // 8. Main Loop (Monitoring & Arming)
   while (1) {
     // 7. Arming & Safety Logic (RX Channel 5) - runs every iteration
-    bool rx_ok = rx_is_connected();
+    // Implement Debounce for EMI protection
+    bool instant_rx_ok = rx_is_connected();
+    static int rx_fail_counter = 0;
+
+    if (instant_rx_ok) {
+      rx_fail_counter = 0;
+    } else {
+      rx_fail_counter++;
+    }
+
+    // Only consider RX lost if missing for > 20 iterations (200ms)
+    // This allows short EMI glitches to pass without disarming
+    bool rx_ok = (rx_fail_counter < 20);
+
+    if (!instant_rx_ok && rx_ok && (rx_fail_counter % 5 == 0)) {
+      printf("WARN: RX Signal Glitch (EMI?) - Ignored (%d/20)\n",
+             rx_fail_counter);
+    }
+
     uint16_t rx_aux1 = rx_get_channel(4);    // Channel 5 (0-indexed is 4)
     bool arm_switch_high = (rx_aux1 > 1600); // Threshold for arming
 
@@ -555,10 +621,13 @@ void app_main(void) {
         system_armed = false;
         mixer_arm(false);
         blackbox_stop(); // Stop recording, preserve data for download
-        if (!rx_ok)
-          printf("DISARMED! (RX Signal Lost - Failsafe Triggered)\n");
-        else
-          printf("DISARMED! (Switch Low)\n");
+        if (!rx_ok) {
+          last_disarm_reason = 3; // RX Loss
+          printf("DISARM: RX Signal Lost! Failsafe Triggered\n");
+        } else {
+          last_disarm_reason = 5; // Switch Low
+          printf("DISARM: Switch Low\n");
+        }
       }
 
       // Clear error state if disarmed and switch is low (allow re-arming)
@@ -587,11 +656,12 @@ void app_main(void) {
       gpio_set_level(LED_PIN, system_armed ? 1 : 0);
     }
 
-    // Check Emergency Stop Button
+    // Check Emergency Stop Button (GPIO 0 / Boot Button)
     if (gpio_get_level(BUTTON_PIN) == 0) {
       system_armed = false;
       mixer_arm(false);
-      printf("EMERGENCY STOP TRIGGERED!\n");
+      last_disarm_reason = 4; // Emergency Stop
+      printf("DISARM: Emergency Stop Button!\n");
       error_state = true;
       snprintf(system_status_msg, sizeof(system_status_msg),
                "EMERGENCY STOP: Button Pressed");

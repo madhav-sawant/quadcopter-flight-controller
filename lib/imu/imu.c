@@ -316,18 +316,43 @@ void imu_read(float dt_sec) {
            imu_state.roll_deg, ROLL_TRIM_DEG, imu_state.pitch_deg,
            PITCH_TRIM_DEG);
   } else {
+    // Store previous angles for rate limiting
+    float prev_pitch = imu_state.pitch_deg;
+    float prev_roll = imu_state.roll_deg;
+
     // Complementary filter with TRIM applied to the accelerometer contribution
     // This way both gyro integration (which starts from trimmed initial angle)
     // and accel correction (which uses trimmed target) agree on what "level"
     // means
-    imu_state.pitch_deg =
+    float new_pitch =
         COMPLEMENTARY_ALPHA *
             (imu_state.pitch_deg + imu_state.gyro_y_dps * dt_sec) +
         (1.0f - COMPLEMENTARY_ALPHA) * (accel_pitch + PITCH_TRIM_DEG);
-    imu_state.roll_deg =
+    float new_roll =
         COMPLEMENTARY_ALPHA *
             (imu_state.roll_deg + imu_state.gyro_x_dps * dt_sec) +
         (1.0f - COMPLEMENTARY_ALPHA) * (accel_roll + ROLL_TRIM_DEG);
+
+    // ANGLE SPIKE FILTER: Limit rate of change to 300 deg/s
+    // This prevents accelerometer vibration spikes from causing sudden angle
+    // jumps At 250Hz loop, max change per cycle = 300 / 250 = 1.2 degrees
+    const float MAX_ANGLE_RATE_DPS = 300.0f;
+    float max_delta = MAX_ANGLE_RATE_DPS * dt_sec;
+
+    float pitch_delta = new_pitch - prev_pitch;
+    if (pitch_delta > max_delta)
+      pitch_delta = max_delta;
+    if (pitch_delta < -max_delta)
+      pitch_delta = -max_delta;
+
+    float roll_delta = new_roll - prev_roll;
+    if (roll_delta > max_delta)
+      roll_delta = max_delta;
+    if (roll_delta < -max_delta)
+      roll_delta = -max_delta;
+
+    imu_state.pitch_deg = prev_pitch + pitch_delta;
+    imu_state.roll_deg = prev_roll + roll_delta;
   }
 }
 

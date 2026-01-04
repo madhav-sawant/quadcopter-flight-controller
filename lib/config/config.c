@@ -9,16 +9,15 @@ system_config_t sys_cfg;
 
 void config_load_defaults(void) {
   // Roll Rate PID
-  // SAFE START for F450 + 1400KV + 8045 props (High Mechanical Gain)
-  // User requested ultra-conservative start: P=0.4, I=0.2
-  sys_cfg.roll_kp = 0.40f;
-  sys_cfg.roll_ki = 0.20f;
-  sys_cfg.roll_kd = 0.03f; // Dampen stops (watch motor temp!)
+  // TUNED for 1045 props + Correction for drift
+  sys_cfg.roll_kp = 0.80f;
+  sys_cfg.roll_ki = 1.50f; // Increased to hold angle against drift
+  sys_cfg.roll_kd = 0.05f; // Slight D boost for 10" props
 
   // Pitch Rate PID (symmetric)
-  sys_cfg.pitch_kp = 0.40f;
-  sys_cfg.pitch_ki = 0.20f;
-  sys_cfg.pitch_kd = 0.03f;
+  sys_cfg.pitch_kp = 0.80f;
+  sys_cfg.pitch_ki = 1.50f; // Increased to hold angle against drift
+  sys_cfg.pitch_kd = 0.05f;
 
   // Yaw Rate PID (Yaw is mechanically weaker)
   sys_cfg.yaw_kp = 2.50f;
@@ -32,9 +31,9 @@ void config_load_defaults(void) {
       50.0f; // Limit I-term authority to 50 (Output limit is 110)
 
   // Angle Mode (Outer Loop) - Self-Leveling
-  sys_cfg.angle_kp = 3.0f; // Conservative: 3 deg/s per degree of error
-  sys_cfg.angle_ki =
-      0.0f; // No I-term initially (prevents slow drift accumulation)
+  sys_cfg.angle_kp =
+      5.0f; // Increased from 3.0 to 5.0 based on stability analysis
+  sys_cfg.angle_ki = 0.5f; // Added I-term (0.5) to fix steady-state error/drift
   sys_cfg.angle_max = 45.0f; // Max tilt angle in degrees
 
   // Safety

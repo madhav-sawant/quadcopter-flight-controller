@@ -64,13 +64,15 @@ typedef struct __attribute__((packed)) {
 // ============================================================================
 // FLAG BIT DEFINITIONS (expanded)
 // ============================================================================
-#define BLACKBOX_FLAG_ARMED (1 << 0) // Motors armed
-#define BLACKBOX_FLAG_ERROR (1 << 1) // System error
-// (1<<2) and (1<<3) reserved/unused
-#define BLACKBOX_FLAG_LOW_BAT (1 << 4)  // Low battery warning
-#define BLACKBOX_FLAG_RX_LOSS (1 << 5)  // RC signal lost
-#define BLACKBOX_FLAG_GYRO_SAT (1 << 6) // Gyro saturation detected
-#define BLACKBOX_FLAG_PID_SAT (1 << 7)  // PID output saturated
+#define BLACKBOX_FLAG_ARMED (1 << 0)       // Motors armed
+#define BLACKBOX_FLAG_ERROR (1 << 1)       // System error
+#define BLACKBOX_FLAG_CRASH_ANGLE (1 << 2) // Disarm: Angle > 60 deg
+#define BLACKBOX_FLAG_CRASH_GYRO (1 << 3)  // Disarm: Gyro > 2000 dps
+#define BLACKBOX_FLAG_LOW_BAT (1 << 4)     // Low battery warning
+#define BLACKBOX_FLAG_RX_LOSS (1 << 5)     // RC signal lost
+#define BLACKBOX_FLAG_GYRO_SAT (1 << 6)    // Gyro saturation detected
+#define BLACKBOX_FLAG_PID_SAT (1 << 7)     // PID output saturated
+#define BLACKBOX_FLAG_ESTOP (1 << 8)       // Emergency stop button pressed
 
 // API Functions
 
