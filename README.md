@@ -1,171 +1,155 @@
-# ESP32 Quadcopter Flight Controller Firmware
+# ESP32 Quadcopter Flight Controller
 
-A custom flight controller firmware for ESP32-based quadcopters, built from scratch using the ESP-IDF framework. Features cascaded PID control, real-time IMU processing, blackbox data logging, and web-based tuning interface.
+A custom flight controller firmware for ESP32-based quadcopters. This was my final year engineering project - built completely from scratch to understand how drones actually fly. No external flight controller libraries, just bare metal PID control.
 
-## ✨ Features
+## About This Project
 
-- **Cascaded PID Control**: Dual-loop control with outer angle controller and inner rate controller running at 500Hz
-- **MPU6050 IMU Integration**: Gyroscope and accelerometer fusion using complementary filter
-- **PPM Receiver Support**: 8-channel PPM input with failsafe handling
-- **Blackbox Logging**: In-memory flight data recorder with CSV export via web interface
-- **Web-Based Tuning**: Live PID parameter adjustment without reflashing
-- **Quad-X Mixer**: Standard quadcopter motor mixing for X-configuration
-- **Safety Features**: 
-  - Arm/disarm via RC switch
-  - Emergency stop on boot button
-  - Throttle limiting for safe tuning
-  - Recovery mode for extreme angles (>45°)
-- **NVS Persistence**: PID gains and IMU calibration saved to flash
+I started this because I wanted to understand what's happening inside commercial flight controllers like Betaflight (which has 200,000+ lines of code). This codebase is around 3,000 lines - simple enough to read and understand, but complete enough to actually fly.
 
-## 🛠️ Hardware Requirements
+**What it does:**
+- Cascaded PID control (angle loop + rate loop) running at 500Hz
+- MPU6050 IMU with complementary filter for attitude estimation
+- PPM receiver input (8 channels)
+- Blackbox logging to RAM with CSV export
+- Web interface for live PID tuning
+- All settings saved to flash memory
 
-| Component | Specification |
-|-----------|---------------|
-| Microcontroller | ESP32 DevKitC |
-| IMU | MPU6050 (I2C) |
-| ESCs | 4x PWM ESCs (OneShot125 compatible) |
-| Receiver | PPM sum output compatible |
-| Frame | F450 or similar Quad-X |
-| Motors | Brushless BLDC (1400kv with 8045 props) |
-| Battery | 3S/4S LiPo |
+## Hardware Setup
 
-### Pin Configuration
+I used the following components:
 
-| Function | GPIO |
-|----------|------|
-| Motor 1 (Rear Right) | 25 |
-| Motor 2 (Front Right) | 26 |
-| Motor 3 (Rear Left) | 27 |
-| Motor 4 (Front Left) | 32 |
-| PPM Receiver | 4 |
-| I2C SDA (MPU6050) | 21 |
-| I2C SCL (MPU6050) | 22 |
-| Status LED | 2 |
-| Emergency Button | 0 |
+| Part | What I Used |
+|------|-------------|
+| Controller | ESP32 DevKitC |
+| IMU | MPU6050 |
+| ESCs | 30A PWM (generic) |
+| Frame | F450 clone |
+| Motors | 1400KV brushless |
+| Props | 8045 |
+| Battery | 3S 2200mAh LiPo |
+| Receiver | FlySky FS-iA6B (PPM mode) |
 
-## 📁 Project Structure
+### Wiring
+
+| Function | ESP32 Pin |
+|----------|-----------|
+| Motor 1 (Rear Right) | GPIO 25 |
+| Motor 2 (Front Right) | GPIO 26 |
+| Motor 3 (Rear Left) | GPIO 27 |
+| Motor 4 (Front Left) | GPIO 32 |
+| Receiver PPM | GPIO 4 |
+| MPU6050 SDA | GPIO 21 |
+| MPU6050 SCL | GPIO 22 |
+| LED | GPIO 2 |
+| Emergency Stop | GPIO 0 (Boot button) |
+
+## Project Structure
 
 ```
+Firmware/
 ├── src/
-│   └── main.c              # Main entry, control loop (500Hz timer)
+│   └── main.c              # Main control loop (runs at 500Hz)
 ├── lib/
-│   ├── angle_control/      # Outer loop angle PID controller
-│   ├── rate_control/       # Inner loop rate PID controller  
-│   ├── pid/                # Generic PID implementation with D-term filtering
-│   ├── imu/                # MPU6050 driver, complementary filter, calibration
-│   ├── mixer/              # Quad-X motor mixing
-│   ├── pwm/                # ESC PWM output (1000-2000µs)
-│   ├── rx/                 # PPM receiver input with ISR
-│   ├── blackbox/           # Flight data logging (ring buffer)
-│   ├── config/             # System configuration, NVS storage
-│   ├── adc/                # Battery voltage monitoring
-│   └── webserver/          # WiFi AP + HTTP server for tuning
-├── platformio.ini          # PlatformIO build configuration
-└── partitions.csv          # ESP32 partition table
+│   ├── adc/                # Battery voltage reading
+│   ├── blackbox/           # Flight data logging
+│   ├── config/             # PID storage (NVS)
+│   ├── imu/                # MPU6050 driver + sensor fusion
+│   ├── mixer/              # Motor mixing for X-quad
+│   ├── pid/                # PID controller
+│   ├── pwm/                # ESC output
+│   ├── rate_control/       # Rate PID wrapper
+│   ├── rx/                 # PPM decoder
+│   ├── telemetry/          # nRF24L01 transmitter
+│   └── webserver/          # WiFi tuning interface
+├── ground_station/         # ESP8266 receiver (separate project)
+│   ├── ground_station.ino
+│   └── README.md
+├── analysis/               # Control system analysis (Python)
+│   └── paper/              # LaTeX files for the paper
+├── docs/
+│   ├── Firmware_Documentation.md
+│   └── BLACKBOX_EXPLAINED.md
+└── platformio.ini
 ```
 
-## 🚀 Getting Started
 
-### Prerequisites
+## How to Build
 
-- [PlatformIO](https://platformio.org/) (VS Code extension or CLI)
-- USB cable for flashing
-- Serial monitor for debugging
-
-### Build & Flash
+I used PlatformIO. Install VS Code + PlatformIO extension, then:
 
 ```bash
-# Clone the repository
-git clone https://github.com/madhav-sawant/ESP32-Quadcopter-Firmware.git
-cd ESP32-Quadcopter-Firmware
-
-# Build the project
+# Build
 pio run
 
-# Flash to ESP32
+# Upload to ESP32
 pio run --target upload
 
-# Monitor serial output
+# Serial monitor
 pio device monitor -b 115200
 ```
 
-### First-Time Setup
+## First Time Setup
 
-1. **Power on** with quad on a level surface
-2. **Wait for gyro calibration** (~1 second, keep still)
-3. **Connect to WiFi AP**: `Drone_AP` (password: `12345678`)
-4. **Open browser**: Navigate to `192.168.4.1`
-5. **Calibrate accelerometer** via web interface (keep level)
-6. **Verify receiver** connection and channel mapping
+1. Place the quad on a flat surface
+2. Power on and wait 1-2 seconds (gyro calibration runs automatically)
+3. Connect to WiFi: `Drone_AP` (password: `12345678`)
+4. Open `192.168.4.1` in browser
+5. Click "Calibrate Accelerometer" (keep it level)
+6. Check that receiver channels are working in the live view
 
-## ⚙️ PID Tuning
+## PID Values
 
-### Current Default Values
+These worked for my F450 build (1400KV motors, 8045 props, ~880g AUW):
 
 | Controller | P | I | D |
 |------------|---|---|---|
-| Rate Roll/Pitch | 0.8 | 0.15 | 0.008 |
-| Rate Yaw | 1.5 | 0.3 | 0.0 |
-| Angle Roll/Pitch | 3.5 | 0.05 | 0.0 |
+| Rate (Roll/Pitch) | 0.8 | 0.15 | 0.008 |
+| Rate (Yaw) | 1.5 | 0.3 | 0.0 |
+| Angle (Roll/Pitch) | 3.5 | 0.05 | 0.0 |
 
-### Tuning Workflow
+Your values will probably be different. Start with Rate P, then tune D, then I. Use the blackbox data to see what's happening.
 
-1. **Set throttle limit** to 1400 in config for safe testing
-2. **Start with rate PIDs**: Tune P first, then D, finally I
-3. **Move to angle PIDs**: Adjust P for response, I for drift
-4. **Use blackbox data**: Export CSV and analyze with Python/Excel
-5. **Iterate**: Each session, adjust one parameter at a time
-
-## 📊 Blackbox Data
-
-The blackbox records at 500Hz with the following fields:
-
-| Field | Description |
-|-------|-------------|
-| timestamp_ms | Milliseconds since boot |
-| roll/pitch/yaw | Current angles (degrees) |
-| gyro_x/y/z | Angular rates (deg/s) |
-| roll/pitch/yaw_setpoint | Target angles |
-| throttle | Throttle input (µs) |
-| motor1-4 | Motor outputs (µs) |
-| pid_roll/pitch/yaw | PID outputs |
-| vbat | Battery voltage (mV) |
-
-Access via: `http://192.168.4.1/blackbox/download`
-
-## 🔧 Control Architecture
+## Control Architecture
 
 ```
-        Angle Mode (Default)
-        ┌──────────────────────────────────────────────────────────┐
-        │                                                          │
-RC Input ──► Angle Controller ──► Rate Controller ──► Mixer ──► Motors
-  (deg)       (P, I, D)           (P, I, D)         (Quad-X)
-               ▲                    ▲
-               │                    │
-               └── IMU Angle ◄──────┴── IMU Gyro
-                   (Complementary Filter)
+Stick Input → Angle PID → Rate PID → Mixer → Motors
+     ↑            ↑           ↑
+     └────────────┴───────────┘
+              IMU Feedback
 ```
 
-- **Control Loop Rate**: 500Hz (2ms)
-- **IMU Sample Rate**: 500Hz
-- **PWM Update Rate**: 500Hz (supports OneShot)
+The angle loop runs the outer control (stick → desired angle → rate setpoint) and the rate loop runs the inner control (rate setpoint → motor commands). Both run at 500Hz.
 
-## ⚠️ Safety Notes
+## Blackbox
 
-- **ALWAYS remove propellers** during bench testing
-- Use **throttle limiter** (~1400µs) during initial tuning
-- Test in a **large open area** away from people
-- Verify **motor spin directions** before first flight
-- Check **center of gravity** is centered
-- Ensure **failsafe** returns throttle to minimum on signal loss
+The blackbox records flight data to RAM at ~80Hz. After landing, download the CSV from `http://192.168.4.1/blackbox/download`. I used Python scripts in `analysis/` to plot the data.
 
-## 📜 License
+Fields recorded: timestamp, angles, gyro rates, setpoints, motor outputs, PID terms, battery voltage
 
-This project is for educational and personal use.
+## Safety Notes
 
-## 🙏 Acknowledgments
+- **Remove props during bench testing** - seriously, I broke 3 props learning this
+- Keep throttle limit at 1400 until you're confident in the tune
+- The boot button (GPIO 0) is emergency stop - press it to cut motors
+- If angle goes over 60° or gyro rate over 500°/s, it auto-disarms
 
-- ESP-IDF framework by Espressif
-- MPU6050 datasheets and community resources
-- Various open-source flight controller projects for inspiration
+## What I Learned
+
+Building this taught me a lot about:
+- Real-time embedded systems (task timing, ISRs, watchdogs)
+- Control theory in practice (PID tuning is harder than textbooks make it seem)
+- Sensor fusion (why accelerometers are noisy on quads)
+- How vibrations mess everything up
+
+See `docs/Firmware_Documentation.md` for detailed code explanations.
+
+## Acknowledgments
+
+- Prof. Amol Sutar for guidance
+- ESP-IDF documentation
+- Various open source flight controller projects for inspiration
+- Lots of YouTube videos on PID tuning
+
+---
+
+*This was made for my B.E. project at Finolex Academy of Management and Technology, Ratnagiri (2024-25).*

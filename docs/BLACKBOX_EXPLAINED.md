@@ -1,12 +1,14 @@
-# Blackbox Logging System: The Flight Recorder
+# Blackbox Logging System
 
-## 1. Why Do We Use It? (The Problem)
-In drone development, things happen too fast for the human eye. 
-*   **The "Blink" Problem:** A PID oscillation happens at 10-50Hz. You blink, and you miss it.
-*   **The "Invisible" Problem:** You can't "see" what the Gyro is feeling or what the motors are being told to do. You only see the result (a crash or shake).
-*   **The "Evidence" Problem:** When a drone crashes, you need to know *why* to fix it. Without data, you are just guessing (e.g., "Maybe P was too high?").
+## Why I Added This
 
-**The Blackbox solves this by recording the internal state of the Flight Controller 100 times per second.**
+When I first started testing, I had no idea why the drone was behaving the way it was. Things happen too fast to see:
+- PID oscillations happen at 10-50Hz - you literally can't see them with your eyes
+- You can't tell what the gyro is reading or what commands are going to the motors
+- When it crashes, you need actual data to figure out why (otherwise you're just guessing)
+
+The blackbox solves this by recording everything at 100Hz.
+
 
 ## 2. What Does It Do?
 It acts exactly like the Flight Data Recorder on an airplane. It saves a **CSV (Excel-compatible)** file to the flash memory every time you arm the drone.

@@ -1,7 +1,11 @@
-# Main Firmware Documentation
+# Firmware Code Documentation
 
-**File**: `src/main.c`
-**Purpose**: The entry point and "Conductor" of the system. It initializes all subsystems, manages the multi-core task scheduling, and executes the critical Flight Control Loop.
+This document explains how each part of the flight controller code works. I wrote this while building the project to help myself (and anyone else who reads this) understand what's happening.
+
+**Main Entry Point**: `src/main.c`
+
+The main file is the "conductor" - it initializes everything, handles the multi-core task scheduling, and runs the flight control loop.
+
 
 ---
 

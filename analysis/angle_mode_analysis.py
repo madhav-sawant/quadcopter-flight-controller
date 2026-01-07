@@ -115,7 +115,7 @@ for i, pole in enumerate(sorted(angle_poles, key=lambda x: -np.real(x))):
 
 
 #=============================================================================
-# GRAPH 1: S-PLANE POLE-ZERO MAP (DAMPING ANALYSIS)
+# GRAPH 1: S-PLANE (POLE-ZERO MAP)
 #=============================================================================
 print("\nGenerating publication-quality graphs...")
 fig, ax = plt.subplots(figsize=(8, 6))
@@ -161,8 +161,8 @@ ax.set_ylim([-15, 15])
 ax.grid(True, linestyle=':', alpha=0.6)
 
 plt.tight_layout()
-plt.savefig(f'{output_dir}/angle_mode_damping.png', dpi=300)
-print(f"  ✓ angle_mode_damping.png")
+plt.savefig(f'{output_dir}/angle_mode_s_plane.png', dpi=300)
+print(f"  ✓ angle_mode_s_plane.png")
 plt.close()
 
 #=============================================================================
