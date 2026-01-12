@@ -39,6 +39,7 @@
 #include <stdint.h>
 #include <stdio.h>
 
+#include "../lib/baro/baro.h" // ADDED BARO HEADER
 #include "../lib/blackbox/blackbox.h"
 #include "../lib/config/config.h"
 #include "../lib/pwm/pwm.h"
@@ -46,8 +47,6 @@
 #include "../lib/webserver/webserver.h"
 #include "adc.h"
 #include "angle_control.h"
-// #include "../lib/baro/baro.h" // DISABLED FOR CHECKPOINT
-// #include "../lib/vl53l0x/vl53l0x.h" // DISABLED FOR CHECKPOINT
 #include "imu.h"
 #include "mixer.h"
 #include "rate_control.h"
@@ -176,8 +175,34 @@ static void control_loop_task(void *arg) {
         rx_aux2; // Suppress unused warning - will be used for mode switch later
 
     // ========================================================================
-    // SENSORS DISABLED FOR CHECKPOINT
+    // BAROMETER READ (50Hz) - Every 5th loop (250Hz / 5 = 50Hz)
     // ========================================================================
+    static int baro_counter = 0;
+    static float baro_ground_pressure_pa =
+        101325.0f; // Default (will be calibrated)
+    static float baro_alt_m = 0.0f;
+    static float baro_pressure_filt = 0.0f;
+
+    if (++baro_counter >= 5) {
+      baro_counter = 0;
+      baro_read();
+      const baro_data_t *baro_data = baro_get_data();
+
+      // First run init
+      if (baro_pressure_filt == 0.0f)
+        baro_pressure_filt = baro_data->pressure_pa;
+
+      // Filter (Alpha 0.95)
+      baro_pressure_filt =
+          (baro_pressure_filt * 0.95f) + (baro_data->pressure_pa * 0.05f);
+
+      // Calculate Alt
+      if (baro_ground_pressure_pa > 0) {
+        baro_alt_m = 44330.0f *
+                     (1.0f - powf(baro_pressure_filt / baro_ground_pressure_pa,
+                                  0.1903f));
+      }
+    }
 
     // ========================================================================
     // ANGLE MODE (Self-Leveling) - ALWAYS ACTIVE
@@ -316,7 +341,7 @@ static void control_loop_task(void *arg) {
           // System Health
           .battery_mv = debug_vbat,
           .loop_time_us = (uint16_t)debug_exec_time_us,
-          .cpu_temp = 0, // CLEANED
+          .cpu_temp = 0, // TODO: Add ESP32 temperature reading
           .pad = 0};
       blackbox_log(&entry);
     } else if (!system_armed) {
@@ -402,20 +427,12 @@ void app_main(void) {
       vTaskDelay(100);
   }
 
-  /* DISABLED FOR CHECKPOINT
   // Init Barometer (Soft Fail if missing)
   if (baro_init() != ESP_OK) {
-     printf("BARO: Init Failed (Check Wiring) - Continuing without Baro.\n");
+    printf("BARO: Init Failed (Check Wiring) - Continuing without Baro.\n");
   } else {
-     printf("BARO: Init Success.\n");
+    printf("BARO: Init Success.\n");
   }
-
-  // Init Laser (Soft Fail if missing)
-  if (vl53l0x_init() != ESP_OK) {
-     printf("LASER: Init Failed (Check Wiring/XSHUT) - Continuing without
-  Laser.\n"); } else { printf("LASER: Init Success.\n");
-  }
-  */
 
   // 4. Gyro/Accel Calibration with LED Feedback
   // COMBINED WAIT: ESC Arming (need time) + Placement (need time)
@@ -439,19 +456,17 @@ void app_main(void) {
   printf("IMU: Gyro Calibrated.\n");
   // NOTE: Do NOT save to NVS here - it would overwrite accel with current
 
-  /* DISABLED
   // BARO CALIBRATION
   printf("BARO: Calibrating Ground Pressure...\n");
   float sum_p = 0.0f;
   int samples = 50;
-  for(int i=0; i<samples; i++) {
-      baro_read();
-      const baro_data_t *b = baro_get_data();
-      sum_p += b->pressure_pa;
-      vTaskDelay(pdMS_TO_TICKS(20)); // 1s total
+  for (int i = 0; i < samples; i++) {
+    baro_read();
+    const baro_data_t *b = baro_get_data();
+    sum_p += b->pressure_pa;
+    vTaskDelay(pdMS_TO_TICKS(20)); // 1s total
   }
-  printf("BARO: Calibration Done (Approx %.0f Pa)\n", sum_p/samples);
-  */
+  printf("BARO: Calibration Done (Approx %.0f Pa)\n", sum_p / samples);
 
   // Step 3: SUCCESS SIGNAL (Pulse LED 3 times)
   for (int i = 0; i < 3; i++) {
@@ -711,6 +726,20 @@ void app_main(void) {
       //        debug_pid[0], debug_pid[1], debug_pid[2],    // PID outputs
       //        debug_motors[0], debug_motors[1], debug_motors[2],
       //        debug_motors[3]);
+
+      // === OLD 5Hz DEBUG PRINT (Commented for testing) ===
+      // static uint32_t last_debug_print = 0;
+      // uint32_t now = esp_timer_get_time() / 1000;
+      // if (now - last_debug_print > 200) { // 5Hz
+      //   printf("GZ:%6.2f | M1:%4d M2:%4d M3:%4d M4:%4d\n",
+      //          imu_get_data()->gyro_z_dps, debug_motors[0],
+      //          debug_motors[1], debug_motors[2], debug_motors[3]);
+      //   last_debug_print = now;
+      // }
+
+      // if (error_state) {
+      //   printf("!!! SYSTEM ERROR / DISARMED !!!\n");
+      // }
     }
   }
 }

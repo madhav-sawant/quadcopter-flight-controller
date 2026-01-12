@@ -11,6 +11,30 @@ static volatile int64_t last_time_us = 0;
 static volatile bool connected = false;
 static volatile int64_t last_frame_time_us = 0;
 
+// 3-Sample Median Filter Buffer
+#define MEDIAN_AMPLES 3
+static volatile uint16_t rx_buffer[RX_CHANNEL_COUNT][MEDIAN_AMPLES];
+static volatile uint8_t rx_buffer_idx[RX_CHANNEL_COUNT] = {0};
+
+// Helper: Fast median of 3 values
+static inline uint16_t median3(uint16_t a, uint16_t b, uint16_t c) {
+  if (a > b) {
+    if (b > c)
+      return b;
+    else if (a > c)
+      return c;
+    else
+      return a;
+  } else {
+    if (a > c)
+      return a;
+    else if (b > c)
+      return c;
+    else
+      return b;
+  }
+}
+
 // Interrupt Service Routine for PPM Pin
 static void IRAM_ATTR rx_isr_handler(void *arg) {
   int64_t now = esp_timer_get_time();
@@ -26,7 +50,19 @@ static void IRAM_ATTR rx_isr_handler(void *arg) {
   // Channel Pulse Processing
   else if (dt >= RX_MIN_US && dt <= RX_MAX_US) {
     if (current_channel < RX_CHANNEL_COUNT) {
-      rx_channels[current_channel] = (uint16_t)dt;
+      // 1. Store raw sample in circular buffer
+      uint8_t idx = rx_buffer_idx[current_channel];
+      rx_buffer[current_channel][idx] = (uint16_t)dt;
+      rx_buffer_idx[current_channel] = (idx + 1) % MEDIAN_AMPLES;
+
+      // 2. Calculate Median
+      uint16_t filtered_val =
+          median3(rx_buffer[current_channel][0], rx_buffer[current_channel][1],
+                  rx_buffer[current_channel][2]);
+
+      // 3. Update public channel value with FILTERED data
+      rx_channels[current_channel] = filtered_val;
+
       current_channel++;
     }
   }
