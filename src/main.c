@@ -45,9 +45,6 @@
 #include "../lib/rx/rx.h"
 #include "../lib/webserver/webserver.h"
 #include "adc.h"
-#include "angle_control.h"
-// #include "../lib/baro/baro.h" // DISABLED FOR CHECKPOINT
-// #include "../lib/vl53l0x/vl53l0x.h" // DISABLED FOR CHECKPOINT
 #include "imu.h"
 #include "mixer.h"
 #include "rate_control.h"
@@ -74,7 +71,7 @@
 // RC Mapping
 #define RC_MAX_ANGLE_DEG 45.0f
 #define RC_MAX_YAW_RATE_DPS 180.0f
-#define RC_DEADBAND_US 5 // Reduced from 50 - High sensitivity for flight
+#define RC_DEADBAND_US 50 // Increased from 20 - FlySky may not center exactly
 
 /* -------------------------------------------------------------------------- */
 /*                               Global State                                 */
@@ -118,8 +115,11 @@ static void control_loop_task(void *arg) {
       1000000 / CONTROL_LOOP_FREQ_HZ; // 4000us for 250Hz
   int64_t next_cycle_time = esp_timer_get_time();
 
-  // Initialize angle controller
-  angle_control_init();
+  // Angle Mode Integral State
+  float angle_i_roll = 0.0f;
+  float angle_i_pitch = 0.0f;
+  const float MAX_ANGLE_I_OUTPUT =
+      30.0f; // Limit I-term contribution to 30 deg/s
 
   printf("Control Loop Task started on Core %d\n", xPortGetCoreID());
 
@@ -176,16 +176,14 @@ static void control_loop_task(void *arg) {
         rx_aux2; // Suppress unused warning - will be used for mode switch later
 
     // ========================================================================
-    // SENSORS DISABLED FOR CHECKPOINT
-    // ========================================================================
-
-    // ========================================================================
     // ANGLE MODE (Self-Leveling) - ALWAYS ACTIVE
     // ========================================================================
-    // Stick -> Target Angle -> Angle Controller -> Target Rate -> Rate PID
+    // Control Flow:
+    //   Stick -> Target Angle -> Angle Error -> Angle P -> Target Rate -> Rate
+    //   PID
     // ========================================================================
 
-    // Map Stick to Target Angle (±angle_max degrees)
+    // 3a. Map Stick to Target Angle (±angle_max degrees)
     float target_roll_angle = 0.0f;
     if (abs(rx_roll - 1500) > RC_DEADBAND_US) {
       target_roll_angle = (float)(rx_roll - 1500) / 500.0f * sys_cfg.angle_max;
@@ -197,15 +195,55 @@ static void control_loop_task(void *arg) {
           (float)(rx_pitch - 1500) / 500.0f * sys_cfg.angle_max;
     }
 
-    // Reset angle controller on disarm
+    // 3b. Calculate Angle Error
+    float roll_angle_error = target_roll_angle - imu->roll_deg;
+    float pitch_angle_error = target_pitch_angle - imu->pitch_deg;
+
+    // 3c. Angle PI Controller -> Outputs Target Rate (deg/s)
+    // ------------------------------------------------------------------------
+    // Integration (I-term) to fix steady-state error / drift
     if (!system_armed) {
-      angle_control_reset();
+      angle_i_roll = 0.0f;
+      angle_i_pitch = 0.0f;
     }
 
-    // Run angle controller (P-only for tuning)
-    float target_roll_rate, target_pitch_rate;
-    angle_control_update(target_roll_angle, target_pitch_angle, imu->roll_deg,
-                         imu->pitch_deg, &target_roll_rate, &target_pitch_rate);
+    if (sys_cfg.angle_ki > 0.0f) {
+      float dt = 1.0f / CONTROL_LOOP_FREQ_HZ;
+      float max_integral = MAX_ANGLE_I_OUTPUT / sys_cfg.angle_ki;
+
+      // Roll
+      angle_i_roll += roll_angle_error * dt;
+      if (angle_i_roll > max_integral)
+        angle_i_roll = max_integral;
+      else if (angle_i_roll < -max_integral)
+        angle_i_roll = -max_integral;
+
+      // Pitch
+      angle_i_pitch += pitch_angle_error * dt;
+      if (angle_i_pitch > max_integral)
+        angle_i_pitch = max_integral;
+      else if (angle_i_pitch < -max_integral)
+        angle_i_pitch = -max_integral;
+    } else {
+      angle_i_roll = 0.0f;
+      angle_i_pitch = 0.0f;
+    }
+
+    float target_roll_rate = (sys_cfg.angle_kp * roll_angle_error) +
+                             (angle_i_roll * sys_cfg.angle_ki);
+    float target_pitch_rate = (sys_cfg.angle_kp * pitch_angle_error) +
+                              (angle_i_pitch * sys_cfg.angle_ki);
+
+    // 3d. Clamp target rates to prevent excessive commands
+    const float MAX_ANGLE_RATE = 150.0f; // Max rate output from angle loop
+    if (target_roll_rate > MAX_ANGLE_RATE)
+      target_roll_rate = MAX_ANGLE_RATE;
+    if (target_roll_rate < -MAX_ANGLE_RATE)
+      target_roll_rate = -MAX_ANGLE_RATE;
+    if (target_pitch_rate > MAX_ANGLE_RATE)
+      target_pitch_rate = MAX_ANGLE_RATE;
+    if (target_pitch_rate < -MAX_ANGLE_RATE)
+      target_pitch_rate = -MAX_ANGLE_RATE;
 
     // 3e. Yaw remains Rate Mode (no angle control for yaw)
     float target_yaw_rate = 0.0f;
@@ -316,7 +354,7 @@ static void control_loop_task(void *arg) {
           // System Health
           .battery_mv = debug_vbat,
           .loop_time_us = (uint16_t)debug_exec_time_us,
-          .cpu_temp = 0, // CLEANED
+          .cpu_temp = 0, // TODO: Add ESP32 temperature reading
           .pad = 0};
       blackbox_log(&entry);
     } else if (!system_armed) {
@@ -395,27 +433,11 @@ void app_main(void) {
   blackbox_init();  // RAM-based flight data logger
   webserver_init(); // WiFi AP + PID tuning web interface
 
-  // Init Sensors
   if (imu_init() != ESP_OK) {
     printf("IMU Init Failed!\n");
     while (1)
       vTaskDelay(100);
   }
-
-  /* DISABLED FOR CHECKPOINT
-  // Init Barometer (Soft Fail if missing)
-  if (baro_init() != ESP_OK) {
-     printf("BARO: Init Failed (Check Wiring) - Continuing without Baro.\n");
-  } else {
-     printf("BARO: Init Success.\n");
-  }
-
-  // Init Laser (Soft Fail if missing)
-  if (vl53l0x_init() != ESP_OK) {
-     printf("LASER: Init Failed (Check Wiring/XSHUT) - Continuing without
-  Laser.\n"); } else { printf("LASER: Init Success.\n");
-  }
-  */
 
   // 4. Gyro/Accel Calibration with LED Feedback
   // COMBINED WAIT: ESC Arming (need time) + Placement (need time)
@@ -438,20 +460,7 @@ void app_main(void) {
   imu_calibrate_gyro();
   printf("IMU: Gyro Calibrated.\n");
   // NOTE: Do NOT save to NVS here - it would overwrite accel with current
-
-  /* DISABLED
-  // BARO CALIBRATION
-  printf("BARO: Calibrating Ground Pressure...\n");
-  float sum_p = 0.0f;
-  int samples = 50;
-  for(int i=0; i<samples; i++) {
-      baro_read();
-      const baro_data_t *b = baro_get_data();
-      sum_p += b->pressure_pa;
-      vTaskDelay(pdMS_TO_TICKS(20)); // 1s total
-  }
-  printf("BARO: Calibration Done (Approx %.0f Pa)\n", sum_p/samples);
-  */
+  // values Accel calibration is only saved when done via webserver
 
   // Step 3: SUCCESS SIGNAL (Pulse LED 3 times)
   for (int i = 0; i < 3; i++) {
@@ -586,44 +595,25 @@ void app_main(void) {
         // Check throttle safety before arming
         uint16_t rx_thr_check = rx_get_channel(2);
 
-        // Battery check - REQUIRE valid voltage to arm
-        uint16_t bat_check = adc_read_battery_voltg();
-        bool battery_ok = (bat_check > 9900); // > 9.9V (3S minimum)
+        // DISABLED: Battery check removed for testing
+        // uint16_t bat_check = adc_read_battery_voltg();
+        // bool battery_ok = (bat_check > 9900);
 
         if (rx_thr_check >= 1150) {
           static int warn_counter = 0;
           if (warn_counter++ % 50 == 0)
             printf("CANNOT ARM: Throttle not low!\n");
-        } else if (!battery_ok) {
-          // Battery not OK - block arming
-          static int bat_warn_counter = 0;
-          if (bat_warn_counter++ % 50 == 0) {
-            if (bat_check < 1000) {
-              printf("CANNOT ARM: No battery detected! (%dmV)\n", bat_check);
-            } else {
-              printf("CANNOT ARM: Battery too low! (%dmV)\n", bat_check);
-            }
-          }
-          if (bat_check < 1000) {
-            snprintf(system_status_msg, sizeof(system_status_msg),
-                     "NO BATTERY DETECTED");
-          } else {
-            snprintf(system_status_msg, sizeof(system_status_msg),
-                     "LOW BATTERY: %dmV (need >9.9V)", bat_check);
-          }
         } else {
           // All checks passed - ARM!
           system_armed = true;
 
           // Reset PIDs to prevent I-term windup
           rate_control_init();
-          angle_control_reset();
 
           mixer_arm(true);
           blackbox_clear(); // Clear old data
           blackbox_start(); // Start recording new flight
           printf("ARMED! (Switch High)\n");
-          snprintf(system_status_msg, sizeof(system_status_msg), "ARMED");
         }
       }
     } else {
@@ -677,24 +667,18 @@ void app_main(void) {
                "EMERGENCY STOP: Button Pressed");
     }
 
-    // Critical battery auto-disarm (in-flight protection)
-    static int crit_bat_counter = 0;
-    if (system_armed && debug_vbat > 5000 && debug_vbat <= 9000) {
-      // Critical <= 9.0V (3S absolute minimum)
-      crit_bat_counter++;
-      if (crit_bat_counter > 50) { // ~500ms sustained
-        system_armed = false;
-        mixer_arm(false);
-        blackbox_stop();
-        error_state = true;
-        last_disarm_reason = 6; // Battery critical
-        printf("DISARM: CRITICAL BATTERY! (%dmV)\n", debug_vbat);
-        snprintf(system_status_msg, sizeof(system_status_msg),
-                 "CRITICAL BATTERY: %dmV - LAND NOW", debug_vbat);
-      }
-    } else {
-      crit_bat_counter = 0;
-    }
+    // DISABLED: Battery auto-disarm removed for testing
+    // WARNING: Monitor battery voltage manually!
+    // static int crit_bat_counter = 0;
+    // if (system_armed && debug_vbat > 5000 &&
+    //     debug_vbat <= 9000) { // Critical <= 9.0V
+    //   crit_bat_counter++;
+    //   if (crit_bat_counter > 50) {
+    //     system_armed = false;
+    //     mixer_arm(false);
+    //     ...
+    //   }
+    // }
 
     vTaskDelay(pdMS_TO_TICKS(10)); // 100Hz Main Loop
 
@@ -711,6 +695,20 @@ void app_main(void) {
       //        debug_pid[0], debug_pid[1], debug_pid[2],    // PID outputs
       //        debug_motors[0], debug_motors[1], debug_motors[2],
       //        debug_motors[3]);
+
+      // === OLD 5Hz DEBUG PRINT (Commented for testing) ===
+      // static uint32_t last_debug_print = 0;
+      // uint32_t now = esp_timer_get_time() / 1000;
+      // if (now - last_debug_print > 200) { // 5Hz
+      //   printf("GZ:%6.2f | M1:%4d M2:%4d M3:%4d M4:%4d\n",
+      //          imu_get_data()->gyro_z_dps, debug_motors[0],
+      //          debug_motors[1], debug_motors[2], debug_motors[3]);
+      //   last_debug_print = now;
+      // }
+
+      // if (error_state) {
+      //   printf("!!! SYSTEM ERROR / DISARMED !!!\n");
+      // }
     }
   }
 }
